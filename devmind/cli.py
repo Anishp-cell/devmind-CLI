@@ -5,6 +5,8 @@ import os
 import logging
 from devmind.memory import initialize_cognee, remember_content, recall_query
 from devmind.ingestion.file_reader import scan_codebase_files
+from devmind.ingestion.git_parser import get_git_history
+from devmind.ingestion.comment_extractor import get_codebase_comments
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -18,9 +20,10 @@ app = typer.Typer(
 
 async def remember_pipeline(directory: str):
     """
-    Core async pipeline for scanning files and loading them into Cognee.
+    Core async pipeline for scanning files, comments, and git logs,
+    and loading them into Cognee.
     """
-    # 1. Scan the directory
+    # 1. Scan the codebase files
     files = scan_codebase_files(directory)
     if not files:
         typer.echo("No files found to ingest.")
@@ -28,25 +31,46 @@ async def remember_pipeline(directory: str):
         
     typer.echo(f"Ingesting {len(files)} files into Cognee memory...")
     
-    # 2. Ingest each file's content
-    success_count = 0
+    # Ingest file contents
+    file_success = 0
     for idx, file_data in enumerate(files, start=1):
         rel_path = file_data["relative_path"]
         content = file_data["content"]
         
-        # We tag this with the path prefix to identify it (use 'File Path' to prevent urlparse from treating 'File:' as a scheme)
         tagged_content = f"File Path: {rel_path}\n---\n{content}"
-        
-        # Use relative path as dataset name to support surgical updates
-        # Replace common separators for clean dataset names (spaces and dots are invalid in Cognee)
         dataset_name = rel_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
         
         logger.info(f"[{idx}/{len(files)}] Processing {rel_path}...")
         success = await remember_content(tagged_content, dataset_name=dataset_name)
         if success:
-            success_count += 1
+            file_success += 1
             
-    typer.echo(f"Successfully remembered {success_count}/{len(files)} files.")
+    typer.echo(f"Successfully remembered {file_success}/{len(files)} files.")
+
+    # 2. Extract and Ingest Git History
+    git_logs = get_git_history(directory, max_commits=20)
+    if git_logs:
+        typer.echo(f"Ingesting git history ({len(git_logs)} commits) into Cognee...")
+        git_success = 0
+        for idx, commit_log in enumerate(git_logs, start=1):
+            dataset_name = f"git_commit_{idx}"
+            success = await remember_content(commit_log, dataset_name=dataset_name)
+            if success:
+                git_success += 1
+        typer.echo(f"Successfully remembered {git_success}/{len(git_logs)} commits.")
+
+    # 3. Extract and Ingest Inline Comments & Docstrings
+    relative_paths = [f["relative_path"] for f in files]
+    comments = get_codebase_comments(directory, relative_paths)
+    if comments:
+        typer.echo(f"Ingesting inline comments ({len(comments)} files containing comments)...")
+        comment_success = 0
+        for idx, comment_block in enumerate(comments, start=1):
+            dataset_name = f"code_comments_{idx}"
+            success = await remember_content(comment_block, dataset_name=dataset_name)
+            if success:
+                comment_success += 1
+        typer.echo(f"Successfully remembered {comment_success}/{len(comments)} comment segments.")
 
 @app.command()
 def remember(
