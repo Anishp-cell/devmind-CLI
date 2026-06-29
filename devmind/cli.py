@@ -189,5 +189,25 @@ def forget(
     else:
         typer.echo("[Warning] Please specify either --file <path> to forget a file, or --all to wipe all databases.")
 
+@app.command()
+def dashboard(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to run the dashboard server on.")
+):
+    """
+    Launch the DevMind Web UI dashboard.
+    """
+    import uvicorn
+    typer.echo(f"Starting DevMind Web UI Dashboard on http://localhost:{port} ...")
+    uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
+
+@app.command()
+def mcp():
+    """
+    Start the DevMind MCP server for integration with Claude Code.
+    """
+    typer.echo("Starting DevMind MCP Server...")
+    from devmind.integrations.claude_code import mcp as mcp_instance
+    mcp_instance.run()
+
 if __name__ == "__main__":
     app()
