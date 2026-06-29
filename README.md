@@ -13,8 +13,9 @@ DevMind is a developer CLI tool and local web interface that gives your codebase
 3. **Decision Logging** (`devmind log "..."`): Records Architecture Decision Records (ADRs) to capture design reasoning.
 4. **Memory Refresh** (`devmind refresh`): Automatically detects modified files, updates the graph, and runs `cognee.improve()`.
 5. **Surgical Forget** (`devmind forget --file ...`): Prunes specific file memory from the knowledge graph using `cognee.forget()`.
-6. **Claude Code MCP Server**: Seamlessly integrates with Claude Code or Cursor via standard Model Context Protocol (MCP).
-7. **Local Dashboard UI**: Provides a clean visual panel showing memory status, search queries, and recent decisions.
+6. **Claude Code MCP Server** (`devmind mcp`): Seamlessly integrates with Claude Code or Cursor via standard Model Context Protocol (MCP).
+7. **Local Dashboard UI** (`devmind dashboard`): Provides a clean visual panel showing memory status, search queries, and recent decisions.
+8. **Smart API Key Rotation**: Automatically detects, formats, and rotates between multiple Groq and OpenRouter API keys to balance rate limits on free-tier LLM access.
 
 ---
 
@@ -22,8 +23,8 @@ DevMind is a developer CLI tool and local web interface that gives your codebase
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/your-username/devmind.git
-cd devmind
+git clone https://github.com/Anishp-cell/devmind-CLI.git
+cd devmind-CLI
 ```
 
 ### 2. Configure Environment Variables
@@ -31,11 +32,13 @@ Copy `.env.example` to `.env` and fill in your keys:
 ```bash
 cp .env.example .env
 ```
-To run for **free**, configure Groq as the LLM provider and Fastembed as the embedding provider in your `.env`:
+To run for **free**, configure your `.env` with a list of rotated API keys:
 ```env
 LLM_PROVIDER="groq"
-GROQ_API_KEY="your_groq_api_key"
-LLM_MODEL="groq/llama-3.3-70b-versatile"
+
+# Add a comma-separated list of Groq keys (gsk_...) and/or OpenRouter keys (sk-or-v1-...)
+# The CLI automatically load-balances and routes requests to the correct endpoints!
+GROQ_API_KEYS="gsk_key1,sk-or-v1-key2,gsk_key3"
 
 EMBEDDING_PROVIDER="fastembed"
 EMBEDDING_MODEL="BAAI/bge-small-en-v1.5"
@@ -60,7 +63,7 @@ pip install -e .
     ```bash
     devmind ask "Why did we switch to redis for the queue?"
     ```
-*   **Log a Decision**:
+*   **Log an Architectural Decision (ADR)**:
     ```bash
     devmind log "Chose FastAPI for the web UI because it supports async routes natively."
     ```
@@ -72,16 +75,37 @@ pip install -e .
     ```bash
     devmind forget --file devmind/web/app.py
     ```
+*   **Wipe Local Database Cache**:
+    ```bash
+    devmind forget --all
+    ```
+*   **Launch Web Dashboard**:
+    ```bash
+    devmind dashboard --port 8000
+    ```
+*   **Start MCP Server**:
+    ```bash
+    devmind mcp
+    ```
 
 ---
 
-## Cognee API Usage
+## Running the Mock Demo Project
 
-DevMind utilizes the full lifecycle of the Cognee memory layer:
-*   `cognee.remember(content, dataset_name)`: Used to ingest source files, git commits, comments, and decision logs into the graph.
-*   `cognee.recall(query_text)`: Used to retrieve relevant codebase context when querying memory.
-*   `cognee.improve(dataset)`: Used during refresh commands to re-enrich the graph and prune stale nodes.
-*   `cognee.forget(dataset_name)`: Used during surgical forget commands to erase memory of specific files/namespaces.
+To test DevMind on a smaller project without polluting your main repo:
+1. Navigate to the demo directory:
+   ```bash
+   cd examples/demo_project
+   ```
+2. Build the memory of the demo:
+   ```bash
+   devmind remember --dir .
+   ```
+3. Query its memory:
+   ```bash
+   devmind ask "What open TODO tasks are left in main.py?"
+   devmind ask "Why do we use SQLite according to our architecture decisions?"
+   ```
 
 ---
 
@@ -90,7 +114,7 @@ DevMind utilizes the full lifecycle of the Cognee memory layer:
 To connect Claude Code to DevMind's memory, add the server to your Claude MCP config:
 
 ```bash
-claude mcp add devmind "python -m devmind.integrations.claude_code"
+claude mcp add devmind "devmind mcp"
 ```
 
 Alternatively, configure your project-level `.mcp.json` file in your project root:
@@ -98,8 +122,8 @@ Alternatively, configure your project-level `.mcp.json` file in your project roo
 {
   "mcpServers": {
     "devmind": {
-      "command": "python",
-      "args": ["-m", "devmind.integrations.claude_code"]
+      "command": "devmind",
+      "args": ["mcp"]
     }
   }
 }
