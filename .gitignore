@@ -1,0 +1,28 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables (private API keys)
+.env
+
+# Cognee local databases & cache
+.cognee_system/
+.cognee_data/
+.cognee_cache/
+
+# Python caching & build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# OS specific files
+.DS_Store
+Thumbs.db

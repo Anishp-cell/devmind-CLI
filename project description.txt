@@ -1,0 +1,281 @@
+================================================================
+PROJECT DESCRIPTION
+================================================================
+Project Name  : DevMind – Codebase Memory for Developers
+Hackathon     : The Hangover Part AI (WeMakeDevs x Cognee)
+Dates         : June 29 – July 5, 2026
+Participant   : Solo
+================================================================
+
+----------------------------------------------------------------
+THE PROBLEM
+----------------------------------------------------------------
+Every developer has experienced this: you step away from a
+codebase for even two weeks, and when you return, you spend
+hours re-reading your own code asking questions like:
+
+  - "Why did I use Redis instead of a simple in-memory cache?"
+  - "What was the bug I fixed here last time?"
+  - "What features are still left to build?"
+  - "Why does this function have that weird edge case check?"
+
+Git commit messages help, but they're shallow.
+README files go stale.
+Comments get deleted.
+And no AI assistant — not ChatGPT, not Copilot — remembers
+any of this across sessions.
+
+Every conversation with an AI about your code starts from zero.
+You spend 10 minutes re-explaining the project before getting
+to the actual question. This is the "AI Hangover" — your
+assistant wakes up every morning with no memory of last night.
+
+----------------------------------------------------------------
+THE SOLUTION
+----------------------------------------------------------------
+DevMind is a CLI tool (with a lightweight web UI) that gives
+your codebase a persistent, queryable memory powered by Cognee.
+
+You feed it your project once — README, source files, git
+commit history, inline comments, TODO notes, architectural
+decisions, past bug reports — and from that point forward,
+your AI assistant knows your project the way a senior teammate
+who has been on the project for months would.
+
+It turns your codebase into a living knowledge graph that you
+can query in plain English, and that gets smarter every time
+you update it.
+
+----------------------------------------------------------------
+CORE FEATURES
+----------------------------------------------------------------
+
+FEATURE 1: One-Command Project Ingestion
+  Command : devmind remember
+  What it does:
+    - Scans the project directory
+    - Reads README.md, all source files, config files,
+      .env.example, package.json / requirements.txt, etc.
+    - Reads git log (commit messages + diffs)
+    - Reads inline code comments and docstrings
+    - Reads any NOTES.md, ARCHITECTURE.md, TODO.md files
+    - Feeds all of this into cognee.remember()
+    - Builds a hybrid graph-vector knowledge store of the
+      entire project
+
+FEATURE 2: Plain-English Codebase Q&A
+  Command : devmind ask "your question here"
+  What it does:
+    - Runs cognee.recall() with the user's question
+    - Cognee automatically routes between semantic search
+      (vector similarity) and deep graph traversals
+    - Returns a grounded, context-aware answer
+  
+  Example queries:
+    devmind ask "why did we use Redis here?"
+    devmind ask "what is still left to build?"
+    devmind ask "summarize what changed in the last 5 commits"
+    devmind ask "where is the authentication logic?"
+    devmind ask "what does the data pipeline look like?"
+    devmind ask "are there any known bugs or open TODOs?"
+
+FEATURE 3: Decision Log (Architecture Decision Records)
+  Command : devmind log "We chose PostgreSQL over MongoDB 
+            because our data is relational and we needed 
+            ACID compliance."
+  What it does:
+    - Calls cognee.remember() with a tagged decision entry
+    - Stores the reasoning, the date, and links it to the
+      relevant files/modules in the knowledge graph
+    - Queryable later: "why did we pick Postgres?"
+
+FEATURE 4: Memory Refresh on Code Changes
+  Command : devmind refresh
+  What it does:
+    - Detects new/changed files since the last remember()
+    - Re-ingests only the changed parts
+    - Calls cognee.improve() to re-enrich the graph,
+      prune stale nodes, and update relationship weights
+    - Keeps memory current without full re-ingestion
+
+FEATURE 5: Forget Resolved / Stale Info
+  Command : devmind forget --tag "bug" or devmind forget
+            --file "old_module.py"
+  What it does:
+    - Calls cognee.forget() to surgically remove memory
+      about deprecated files, resolved bugs, removed features
+    - Keeps the knowledge graph clean and relevant
+
+FEATURE 6: Lightweight Web UI (Bonus)
+  - A simple local web interface (FastAPI + HTML)
+  - Chat window to ask questions about your codebase
+  - Timeline view of decision logs
+  - Memory status (what files have been ingested, when)
+  - "Refresh memory" button
+
+----------------------------------------------------------------
+HOW COGNEE IS USED (Core API Coverage)
+----------------------------------------------------------------
+
+cognee.remember()
+  - Called during `devmind remember` and `devmind log`
+  - Ingests source files, git history, README, comments,
+    architectural decisions, and TODO notes
+
+cognee.recall()
+  - Called during `devmind ask`
+  - Routes queries between vector similarity and graph
+    traversal depending on question type
+  - Retrieves grounded answers from the knowledge graph
+
+cognee.improve()
+  - Called during `devmind refresh`
+  - Re-enriches the graph after code changes
+  - Prunes stale or outdated nodes (e.g. deleted files)
+  - Adapts relationship weights over time
+
+cognee.forget()
+  - Called during `devmind forget`
+  - Removes memory about deprecated modules, resolved bugs,
+    or any data the developer no longer needs
+
+All four lifecycle APIs are used. This maximises the
+judging score for "Best Use of Cognee."
+
+----------------------------------------------------------------
+INTEGRATION: CLAUDE CODE
+----------------------------------------------------------------
+Cognee provides an official Claude Code integration guide.
+DevMind will implement this integration so that:
+
+  - Claude Code running in the project directory
+    automatically has access to the Cognee memory layer
+  - When you ask Claude Code a question, it first queries
+    DevMind's knowledge graph for project context
+  - Claude Code never has to ask "what does this project do?"
+    because DevMind already told it
+
+Guide: https://github.com/topoteretes/cognee-integrations/
+       tree/main/integrations/claude-code
+
+----------------------------------------------------------------
+TECH STACK
+----------------------------------------------------------------
+Language          : Python
+CLI Framework     : Typer (clean CLI with --help docs)
+Memory Layer      : Cognee (open-source, self-hosted)
+LLM               : Claude (via Anthropic API) or OpenAI
+Web UI Backend    : FastAPI
+Web UI Frontend   : Plain HTML + TailwindCSS (single file)
+Git Parsing       : GitPython
+File Parsing      : Built-in Python + pathlib
+Vector Store      : Cognee default (LanceDB or Qdrant)
+Graph Store       : Cognee default (NetworkX or Neo4j)
+Packaging         : pip installable CLI (`devmind`)
+
+----------------------------------------------------------------
+PROJECT STRUCTURE
+----------------------------------------------------------------
+devmind/
+├── README.md                  ← Clear setup + demo guide
+├── requirements.txt
+├── setup.py                   ← pip install -e .
+├── devmind/
+│   ├── __init__.py
+│   ├── cli.py                 ← Typer CLI entry point
+│   ├── memory.py              ← Cognee wrapper (remember,
+│   │                              recall, improve, forget)
+│   ├── ingestion/
+│   │   ├── file_reader.py     ← Reads source files
+│   │   ├── git_parser.py      ← Parses git log + diffs
+│   │   └── comment_extractor.py ← Extracts docstrings/comments
+│   ├── web/
+│   │   ├── app.py             ← FastAPI server
+│   │   └── templates/
+│   │       └── index.html     ← Chat UI
+│   └── integrations/
+│       └── claude_code.py     ← Claude Code MCP integration
+├── examples/
+│   └── demo_project/          ← Sample project to demo on
+└── ARCHITECTURE.md
+
+----------------------------------------------------------------
+USER JOURNEY (The Demo Flow)
+----------------------------------------------------------------
+Step 1: Developer clones DevMind and installs it
+        pip install -e .
+
+Step 2: Developer navigates to their project
+        cd my-awesome-project
+
+Step 3: One command gives the AI their entire codebase memory
+        devmind remember
+        > Scanning 47 files...
+        > Reading git history (312 commits)...
+        > Extracting 1,204 inline comments...
+        > Building knowledge graph...
+        > ✅ Memory ready. DevMind knows your project.
+
+Step 4: Developer asks questions in plain English
+        devmind ask "why do we use a queue for email sending?"
+        > Based on your code and commit history:
+        > You switched to a queue (Celery + Redis) in commit
+        > a3f2b1 because synchronous email sending was causing
+        > request timeouts. The decision was made on March 12.
+        > See: src/notifications/email.py, line 34.
+
+Step 5: Developer logs a new architectural decision
+        devmind log "Switched from REST to GraphQL for the
+        mobile API because clients needed flexible queries."
+
+Step 6: Code changes → refresh memory
+        devmind refresh
+        > 8 files changed since last remember.
+        > Updating knowledge graph...
+        > ✅ Memory up to date.
+
+Step 7: Old module deleted → clean up
+        devmind forget --file "src/legacy/old_auth.py"
+        > ✅ Memory pruned.
+
+----------------------------------------------------------------
+WHY THIS WINS
+----------------------------------------------------------------
+
+Judging Criteria Alignment:
+
+01 Potential Impact     ★★★★★
+   Every developer on the planet has this problem.
+   Real pain point. Immediate utility.
+
+02 Creativity           ★★★★☆
+   Treating a codebase as a living knowledge graph
+   you can converse with is genuinely novel.
+
+03 Technical Excellence ★★★★★
+   Clean CLI, proper ingestion pipeline, git parsing,
+   FastAPI web UI, MCP integration. Strong engineering.
+
+04 Best Use of Cognee   ★★★★★
+   All 4 APIs used: remember, recall, improve, forget.
+   Deep integration, not just surface-level usage.
+
+05 User Experience      ★★★★★
+   Simple CLI. One command to get started.
+   Natural language queries. Clean web UI.
+
+06 Presentation Quality ★★★★★
+   Demo on a real project (e.g. the DevMind repo itself).
+   "It knows itself" is a great story.
+
+----------------------------------------------------------------
+THE STORY FOR THE DEMO
+----------------------------------------------------------------
+"I built DevMind on top of itself.
+When I ask 'why did I structure the CLI this way?'
+it tells me — because it remembers every decision I made
+while building it. Your codebase finally has memory."
+
+================================================================
+END OF PROJECT DESCRIPTION
+================================================================
