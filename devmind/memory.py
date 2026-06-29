@@ -103,13 +103,18 @@ def initialize_cognee():
         cognee.config.set_llm_api_key(groq_key)
         cognee.config.set_llm_model(model)
         if not groq_key:
-            logger.warning("No API keys found in environment. requests will fail.")
+            print("[Error] No LLM API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY in your .env file.")
+            import sys
+            sys.exit(1)
     else:
+        openai_key = os.getenv("OPENAI_API_KEY", "")
         cognee.config.set_llm_provider(llm_provider)
         cognee.config.set_llm_model(os.getenv("LLM_MODEL", "openai/gpt-4o-mini"))
-        cognee.config.set_llm_api_key(os.getenv("OPENAI_API_KEY", ""))
-        if llm_provider == "openai" and not os.getenv("OPENAI_API_KEY"):
-            logger.warning("OPENAI_API_KEY is not set in your environment.")
+        cognee.config.set_llm_api_key(openai_key)
+        if llm_provider == "openai" and not openai_key:
+            print("[Error] OPENAI_API_KEY is not set in your environment.")
+            import sys
+            sys.exit(1)
 
     # Configure embedding provider
     cognee.config.set_embedding_provider(embedding_provider)

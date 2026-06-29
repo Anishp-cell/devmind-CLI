@@ -26,3 +26,6 @@ dist/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Hackathon article/post drafts
+blog_post.md
