@@ -3,7 +3,7 @@ import typer
 import asyncio
 import os
 import logging
-from devmind.memory import initialize_cognee, remember_content, recall_query
+from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history
 from devmind.ingestion.comment_extractor import get_codebase_comments
@@ -122,6 +122,72 @@ def log(
         typer.echo("[Success] Architectural decision successfully logged.")
     else:
         typer.echo("[Error] Failed to log architectural decision.")
+
+@app.command()
+def refresh(
+    directory: str = typer.Option(
+        ".", 
+        "--dir", "-d", 
+        help="The directory of the codebase to refresh."
+    )
+):
+    """
+    Refresh codebase memory by scanning for changed files and refining relationships.
+    """
+    initialize_cognee()
+    typer.echo("Scanning for codebase changes to refresh memory...")
+    asyncio.run(remember_pipeline(directory))
+    
+    typer.echo("Refining the codebase memory graph structure...")
+    # Improve memory on all dataset partitions
+    success = asyncio.run(improve_memory(dataset_name="codebase_memory"))
+    if success:
+        typer.echo("[Success] Memory refresh and relationship refinement completed.")
+    else:
+        typer.echo("[Warning] File changes re-ingested, but relationship refinement had warnings.")
+
+@app.command()
+def forget(
+    file_path: str = typer.Option(
+        None, 
+        "--file", "-f", 
+        help="The relative path of the file memory to forget."
+    ),
+    all_memories: bool = typer.Option(
+        False, 
+        "--all", "-a", 
+        help="Wipe all local memory databases completely."
+    )
+):
+    """
+    Surgically forget a specific file's memory, or completely wipe the local databases.
+    """
+    initialize_cognee()
+    
+    if all_memories:
+        typer.echo("Wiping all local memory databases...")
+        import shutil
+        from devmind.memory import system_path, data_path
+        try:
+            if os.path.exists(system_path):
+                shutil.rmtree(system_path)
+            if os.path.exists(data_path):
+                shutil.rmtree(data_path)
+            typer.echo("[Success] Local memory databases completely wiped.")
+        except Exception as e:
+            typer.echo(f"[Error] Failed to wipe memory folders: {e}")
+        return
+        
+    if file_path:
+        dataset_name = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
+        typer.echo(f"Removing memory dataset '{dataset_name}'...")
+        success = asyncio.run(forget_memory(dataset_name))
+        if success:
+            typer.echo(f"[Success] Memory of '{file_path}' successfully forgotten.")
+        else:
+            typer.echo(f"[Error] Failed to forget memory of '{file_path}'.")
+    else:
+        typer.echo("[Warning] Please specify either --file <path> to forget a file, or --all to wipe all databases.")
 
 if __name__ == "__main__":
     app()
