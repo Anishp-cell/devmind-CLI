@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevMind – Codebase Memory Dashboard</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Plus Jakarta Sans', 'sans-serif'],
+                        display: ['Outfit', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f5f3ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            900: '#312e81',
+                        },
+                        dark: {
+                            50: '#a1a1aa',
+                            900: '#09090b',
+                            800: '#18181b',
+                            700: '#27272a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background: radial-gradient(circle at top right, rgba(99, 102, 241, 0.15), rgba(9, 9, 11, 1) 50%);
+        }
+        .glass {
+            background: rgba(24, 24, 27, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #27272a;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3f3f46;
+        }
+    </style>
+</head>
+<body class="text-zinc-100 min-h-screen flex flex-col font-sans selection:bg-brand-500 selection:text-white">
+
+    <!-- Header -->
+    <header class="w-full glass py-4 px-6 border-b border-zinc-800 sticky top-0 z-50 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-brand-500/20">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+            </div>
+            <div>
+                <h1 class="font-display font-bold text-xl tracking-tight bg-gradient-to-r from-white via-indigo-200 to-brand-500 bg-clip-text text-transparent">
+                    DevMind
+                </h1>
+                <p class="text-xs text-zinc-400">Codebase Memory Layer</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                Local Engine Connected
+            </span>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+        
+        <!-- Left Side: Control panel and logs (4 cols) -->
+        <div class="lg:col-span-4 flex flex-col gap-6">
+            
+            <!-- Ingestion Control Card -->
+            <div class="glass p-6 rounded-2xl flex flex-col gap-4 shadow-xl">
+                <h2 class="font-display font-semibold text-lg text-white flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                    Memory Ingestion
+                </h2>
+                <p class="text-xs text-zinc-400 leading-relaxed">
+                    Trigger background codebase sync. Scans files, comments, and git commit history to update the graph.
+                </p>
+                <button onclick="triggerRemember()" id="ingest-btn" class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 font-semibold text-sm transition-all duration-300 shadow-lg shadow-brand-600/10 hover:shadow-brand-600/30 flex items-center justify-center gap-2">
+                    <span>Remember Codebase</span>
+                </button>
+                <div id="ingest-status" class="hidden text-xs text-zinc-400 border-t border-zinc-800 pt-3 mt-1"></div>
+            </div>
+
+            <!-- ADR Logger Card -->
+            <div class="glass p-6 rounded-2xl flex flex-col gap-4 shadow-xl flex-1">
+                <h2 class="font-display font-semibold text-lg text-white flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Log Design Decision (ADR)
+                </h2>
+                <p class="text-xs text-zinc-400 leading-relaxed">
+                    Record structural choices, architectural transitions, or pattern modifications so the memory can reference it.
+                </p>
+                <div class="flex-1 flex flex-col gap-3">
+                    <textarea id="adr-input" placeholder="We switched our main cache layer from Redis to memory cache to simplify infrastructure..." class="w-full flex-1 min-h-[140px] rounded-xl bg-zinc-900 border border-zinc-800 p-3 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500 transition-all resize-none"></textarea>
+                    <button onclick="logDecision()" id="log-btn" class="w-full py-2.5 px-4 rounded-xl border border-zinc-800 hover:border-brand-500 bg-zinc-900/50 hover:bg-zinc-800/50 font-medium text-sm transition-all duration-300 flex items-center justify-center gap-2">
+                        <span>Save ADR</span>
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Right Side: Chat box (8 cols) -->
+        <div class="lg:col-span-8 glass rounded-2xl flex flex-col overflow-hidden shadow-xl h-[calc(100vh-140px)]">
+            <!-- Chat Header -->
+            <div class="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/40">
+                <div class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full bg-brand-500 animate-pulse"></span>
+                    <h3 class="font-display font-semibold text-white">Ask Codebase Memory</h3>
+                </div>
+                <button onclick="clearChat()" class="text-xs text-zinc-400 hover:text-white transition">Clear Chat</button>
+            </div>
+
+            <!-- Chat Area -->
+            <div id="chat-messages" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
+                <!-- Greeting -->
+                <div class="flex gap-3 max-w-[85%]">
+                    <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">
+                        🤖
+                    </div>
+                    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-300 leading-relaxed">
+                        Hello! I am your codebase's persistent memory. Ask me anything about the architecture, developer decisions, git commits, or inline notes!
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Box -->
+            <div class="p-4 border-t border-zinc-800 bg-zinc-900/40 flex gap-3 items-center">
+                <input id="chat-input" onkeydown="handleEnter(event)" type="text" placeholder="Why did we create the API key rotation mechanism?" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-500 transition" />
+                <button onclick="sendMessage()" id="send-btn" class="h-11 w-11 rounded-xl bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-lg transition duration-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="w-full text-center py-4 text-xs text-zinc-600 border-t border-zinc-900">
+        DevMind – Built with Cognee Graph & Vector Engine x WeMakeDevs
+    </footer>
+
+    <!-- Scripts -->
+    <script>
+        function handleEnter(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        async function triggerRemember() {
+            const btn = document.getElementById('ingest-btn');
+            const status = document.getElementById('ingest-status');
+            
+            btn.disabled = true;
+            btn.innerHTML = `<span class="inline-block animate-spin mr-2">🔄</span> Ingesting...`;
+            status.classList.remove('hidden');
+            status.innerHTML = "Scanning directory structure and logging git commits...";
+            
+            try {
+                const response = await fetch('/api/remember', { method: 'POST' });
+                const data = await response.json();
+                status.innerHTML = `✅ ${data.message || 'Ingestion triggered!'}`;
+            } catch (err) {
+                status.innerHTML = `❌ Error starting ingestion: ${err.message}`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span>Remember Codebase</span>';
+            }
+        }
+
+        async function logDecision() {
+            const input = document.getElementById('adr-input');
+            const btn = document.getElementById('log-btn');
+            const val = input.value.trim();
+            if (!val) return;
+
+            btn.disabled = true;
+            btn.innerText = 'Saving Decision...';
+
+            try {
+                const response = await fetch('/api/log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ decision: val })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    input.value = '';
+                    alert('Architectural Decision Record successfully logged to memory graph!');
+                } else {
+                    alert('Error: Failed to save decision.');
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = 'Save ADR';
+            }
+        }
+
+        function clearChat() {
+            document.getElementById('chat-messages').innerHTML = `
+                <div class="flex gap-3 max-w-[85%]">
+                    <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">🤖</div>
+                    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-300 leading-relaxed">
+                        Hello! I am your codebase's persistent memory. Ask me anything about the architecture, developer decisions, git commits, or inline notes!
+                    </div>
+                </div>
+            `;
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text) return;
+
+            input.value = '';
+            
+            // Append user message
+            const messagesDiv = document.getElementById('chat-messages');
+            messagesDiv.innerHTML += `
+                <div class="flex gap-3 max-w-[85%] self-end flex-row-reverse">
+                    <div class="h-8 w-8 rounded-lg bg-brand-600 flex items-center justify-center shrink-0">👤</div>
+                    <div class="bg-brand-600 rounded-2xl px-4 py-3 text-sm text-white leading-relaxed">
+                        ${text}
+                    </div>
+                </div>
+            `;
+            
+            // Typing indicator
+            const typingId = 'typing-' + Date.now();
+            messagesDiv.innerHTML += `
+                <div id="${typingId}" class="flex gap-3 max-w-[85%]">
+                    <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">🤖</div>
+                    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-400 leading-relaxed flex items-center gap-1">
+                        Searching graph memory<span class="animate-bounce">.</span><span class="animate-bounce" style="animation-delay: 0.2s">.</span><span class="animate-bounce" style="animation-delay: 0.4s">.</span>
+                    </div>
+                </div>
+            `;
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+            try {
+                const response = await fetch('/api/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: text })
+                });
+                const data = await response.json();
+                
+                // Remove typing indicator
+                document.getElementById(typingId).remove();
+
+                const answer = data.answer || "No relevant memories found.";
+
+                // Format paragraph spacing
+                const formattedAnswer = answer.replace(/\n/g, '<br>');
+
+                // Append assistant message
+                messagesDiv.innerHTML += `
+                    <div class="flex gap-3 max-w-[85%]">
+                        <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">🤖</div>
+                        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-300 leading-relaxed">
+                            ${formattedAnswer}
+                        </div>
+                    </div>
+                `;
+            } catch (err) {
+                document.getElementById(typingId).remove();
+                messagesDiv.innerHTML += `
+                    <div class="flex gap-3 max-w-[85%]">
+                        <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">🤖</div>
+                        <div class="bg-red-950/40 border border-red-900 text-red-200 rounded-2xl px-4 py-3 text-sm leading-relaxed">
+                            Error searching memory: ${err.message}
+                        </div>
+                    </div>
+                `;
+            }
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+    </script>
+</body>
+</html>
