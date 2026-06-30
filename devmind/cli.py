@@ -23,6 +23,32 @@ from devmind.ingestion.comment_extractor import get_codebase_comments
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("devmind.cli")
 
+def run_async(coro):
+    """
+    Custom asyncio runner that sets an exception handler to swallow 
+    noisy Win32 socket teardown/closed event loop warnings on shutdown.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    def silence_exceptions(loop, context):
+        exc = context.get("exception")
+        msg = context.get("message", "")
+        # Swallows Win32 10038/not-a-socket/Event loop is closed warnings during exit
+        if (exc and ("Event loop is closed" in str(exc) or "10038" in str(exc) or "socket" in str(exc))) or "Event loop is closed" in msg or "SSL transport" in msg:
+            return
+        loop.default_exception_handler(context)
+        
+    loop.set_exception_handler(silence_exceptions)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        loop.close()
+
 app = typer.Typer(
     name="devmind",
     help="DevMind – Codebase Memory for Developers. Powered by Cognee.",
@@ -95,7 +121,7 @@ def remember(
     Ingest the codebase files into persistent Cognee memory.
     """
     initialize_cognee()
-    asyncio.run(remember_pipeline(directory))
+    run_async(remember_pipeline(directory))
     typer.echo("[Success] Codebase memory ingestion completed.")
 
 @app.command()
@@ -108,7 +134,7 @@ def ask(
     initialize_cognee()
     
     typer.echo(f"Querying codebase memory for: '{query}'...")
-    answer = asyncio.run(recall_query(query))
+    answer = run_async(recall_query(query))
     
     typer.echo("\n--- Response ---")
     typer.echo(answer)
@@ -128,7 +154,7 @@ def log(
     import time
     dataset_name = f"adr_decision_{int(time.time())}"
     
-    success = asyncio.run(remember_content(tagged_decision, dataset_name=dataset_name))
+    success = run_async(remember_content(tagged_decision, dataset_name=dataset_name))
     if success:
         typer.echo("[Success] Architectural decision successfully logged.")
     else:
@@ -147,11 +173,11 @@ def refresh(
     """
     initialize_cognee()
     typer.echo("Scanning for codebase changes to refresh memory...")
-    asyncio.run(remember_pipeline(directory))
+    run_async(remember_pipeline(directory))
     
     typer.echo("Refining the codebase memory graph structure...")
     # Improve memory on all dataset partitions
-    success = asyncio.run(improve_memory(dataset_name="codebase_memory"))
+    success = run_async(improve_memory(dataset_name="codebase_memory"))
     if success:
         typer.echo("[Success] Memory refresh and relationship refinement completed.")
     else:
@@ -192,7 +218,7 @@ def forget(
     if file_path:
         dataset_name = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
         typer.echo(f"Removing memory dataset '{dataset_name}'...")
-        success = asyncio.run(forget_memory(dataset_name))
+        success = run_async(forget_memory(dataset_name))
         if success:
             typer.echo(f"[Success] Memory of '{file_path}' successfully forgotten.")
         else:
