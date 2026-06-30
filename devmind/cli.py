@@ -138,7 +138,42 @@ def ask(
     
     typer.echo("\n--- Response ---")
     typer.echo(answer)
-    typer.echo("----------------\n")
+    typer.echo("----------------")
+
+@app.command()
+def chat():
+    """
+    Start an interactive DevMind terminal chat session to explore your codebase.
+    """
+    initialize_cognee()
+    
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+    from rich.prompt import Prompt
+
+    console = Console()
+    console.print(Panel.fit("[bold blue]DevMind Codebase Chat[/bold blue]\n[dim]Type your queries below. Type 'exit' or 'quit' to close.[/dim]", border_style="blue"))
+    
+    while True:
+        try:
+            query = Prompt.ask("\n[bold green]You[/bold green]")
+            if not query.strip():
+                continue
+            if query.lower().strip() in ['exit', 'quit', 'clear']:
+                console.print("[dim]Goodbye![/dim]")
+                break
+                
+            with console.status("[bold cyan]DevMind is thinking...[/bold cyan]", spinner="dots"):
+                answer = run_async(recall_query(query))
+                
+            console.print("\n[bold magenta]DevMind:[/bold magenta]")
+            console.print(Markdown(answer))
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Goodbye![/dim]")
+            break
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {str(e)}")
 
 @app.command()
 def log(
