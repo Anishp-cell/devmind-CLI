@@ -151,6 +151,24 @@ async def remember_content(content: str, dataset_name: str) -> bool:
         logger.error(f"Error during cognee.remember for '{dataset_name}': {e}", exc_info=True)
         return False
 
+async def get_all_dataset_names() -> list[str]:
+    """
+    Fetches all registered dataset names from Cognee's relational metadata.
+    """
+    try:
+        from cognee.infrastructure.databases.relational import get_relational_engine
+        from sqlalchemy import select
+        from cognee.modules.data.models import Dataset
+        
+        engine = get_relational_engine()
+        async with engine.get_async_session() as session:
+            stmt = select(Dataset)
+            results = (await session.execute(stmt)).scalars().all()
+            return [d.name for d in results if d.name]
+    except Exception as e:
+        logger.warning(f"Could not fetch dataset names dynamically: {e}")
+        return []
+
 async def recall_query(query: str) -> str:
     """
     Queries the Cognee memory graph using natural language.
@@ -168,7 +186,13 @@ async def recall_query(query: str) -> str:
                 cognee.config.set_llm_model(model)
 
         logger.info(f"Recalling memory for query: '{query}'...")
-        results = await cognee.recall(query_text=query)
+        datasets = await get_all_dataset_names()
+        if datasets:
+            logger.info(f"Searching across datasets: {datasets}")
+            results = await cognee.recall(query_text=query, datasets=datasets)
+        else:
+            results = await cognee.recall(query_text=query)
+            
         if not results:
             return "No relevant memories found."
         
