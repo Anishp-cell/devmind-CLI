@@ -3,6 +3,12 @@ import sys
 import asyncio
 import logging
 
+import warnings
+
+# Suppress ResourceWarning and DeprecationWarning from aiohttp/asyncio during garbage collection
+warnings.filterwarnings("ignore", category=ResourceWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 # Suppress Windows proactor event loop SSL bugs during shutdown
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
