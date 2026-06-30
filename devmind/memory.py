@@ -24,6 +24,7 @@ os.environ["SYSTEM_ROOT_DIRECTORY"] = system_path
 os.environ["DATA_ROOT_DIRECTORY"] = data_path
 os.environ["CACHE_ROOT_DIRECTORY"] = os.path.join(project_root, ".cognee_cache")
 os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
+os.environ["LOG_LEVEL"] = "WARNING"
 
 import cognee
 
