@@ -188,10 +188,13 @@ async def recall_query(query: str) -> str:
 
         logger.info(f"Recalling memory for query: '{query}'...")
         datasets = await get_all_dataset_names()
+        from cognee.modules.search.types import SearchType
+        query_type = SearchType.RAG_COMPLETION
+        
         if datasets:
             logger.info(f"Searching across datasets individually in parallel: {datasets}")
             # Query each dataset in parallel to bypass Cognee's single-dataset check
-            tasks = [cognee.recall(query_text=query, datasets=[d]) for d in datasets]
+            tasks = [cognee.recall(query_text=query, query_type=query_type, datasets=[d]) for d in datasets]
             results_lists = await asyncio.gather(*tasks, return_exceptions=True)
             
             results = []
@@ -201,7 +204,7 @@ async def recall_query(query: str) -> str:
                 elif isinstance(r_list, Exception):
                     logger.warning(f"Error recalling from a dataset partition: {r_list}")
         else:
-            results = await cognee.recall(query_text=query)
+            results = await cognee.recall(query_text=query, query_type=query_type)
             
         if not results:
             return "No relevant memories found."
