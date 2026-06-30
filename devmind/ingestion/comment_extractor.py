@@ -84,7 +84,7 @@ def get_codebase_comments(repo_path: str, source_files: list[str]) -> list[str]:
         file_comments = extract_comments_from_file(abs_path)
         
         if file_comments:
-            comment_log = [f"File: {file_path}"]
+            comment_log = [f"File Path: {file_path}"]
             comment_log.extend(file_comments)
             all_comments.append("\n".join(comment_log))
             
