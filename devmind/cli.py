@@ -1,8 +1,14 @@
 # pyrefly: ignore [missing-import]
 import typer
+import sys
 import asyncio
 import os
 import logging
+
+# Suppress Windows proactor event loop SSL bugs during shutdown
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history

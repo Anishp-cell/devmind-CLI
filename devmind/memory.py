@@ -216,5 +216,8 @@ async def forget_memory(dataset_name: str) -> bool:
         logger.info(f"Successfully forgot dataset '{dataset_name}'.")
         return True
     except Exception as e:
+        if isinstance(e, AttributeError) and "'NoneType' object has no attribute 'id'" in str(e):
+            logger.info(f"Dataset '{dataset_name}' was not found in memory (it may have already been deleted or never ingested).")
+            return True
         logger.error(f"Error during cognee.forget for '{dataset_name}': {e}", exc_info=True)
         return False

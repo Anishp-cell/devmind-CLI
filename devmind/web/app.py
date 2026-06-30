@@ -1,6 +1,11 @@
 import os
+import sys
 import asyncio
 import logging
+
+# Suppress Windows proactor event loop SSL bugs during shutdown
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
