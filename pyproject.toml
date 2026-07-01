@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devmind-cli"
+version = "0.1.0"
+description = "DevMind - Semantic Codebase Memory and Agentic Search for Developers"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Anishp-cell" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "cognee[fastembed]>=0.1.0",
+    "typer[all]>=0.9.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.22.0",
+    "gitpython>=3.1.30",
+    "fastmcp>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "jinja2>=3.1.2",
+    "groq>=0.9.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/Anishp-cell/devmind-CLI"
+Issues = "https://github.com/Anishp-cell/devmind-CLI/issues"
+
+[project.scripts]
+devmind = "devmind.cli:app"
+
+# Optional dependencies for local development
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "isort>=5.12",
+    "mypy>=1.0",
+]
+
+# Ensures setuptools finds your package code correctly
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["devmind*"]
