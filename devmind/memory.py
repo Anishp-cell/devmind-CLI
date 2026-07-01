@@ -25,6 +25,7 @@ os.environ["DATA_ROOT_DIRECTORY"] = data_path
 os.environ["CACHE_ROOT_DIRECTORY"] = os.path.join(project_root, ".cognee_cache")
 os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
 os.environ["LOG_LEVEL"] = "WARNING"
+os.environ["LITELLM_SUPPRESS_PROVIDER_INFO"] = "True"
 
 import cognee
 
@@ -212,16 +213,26 @@ async def recall_query(query: str) -> str:
             return "No relevant memories found."
         
         # Cognee returns a list of result objects or dictionaries. 
-        # Format the output cleanly for console display.
+        # Format the output cleanly for console display by deduplicating identical or fallback responses.
         formatted_results = []
+        seen_texts = set()
         for index, result in enumerate(results, start=1):
             if hasattr(result, "text"):
-                formatted_results.append(result.text)
+                val = result.text
             elif isinstance(result, dict) and "text" in result:
-                formatted_results.append(result["text"])
+                val = result["text"]
             else:
-                formatted_results.append(str(result))
+                val = str(result)
+            
+            # Normalize whitespace and casing for reliable duplication checks
+            normalized = " ".join(val.strip().lower().split())
+            if normalized and normalized != "got it." and normalized not in seen_texts:
+                seen_texts.add(normalized)
+                formatted_results.append(val)
                 
+        if not formatted_results:
+            return "No relevant memories found."
+            
         return "\n\n".join(formatted_results)
     except Exception as e:
         logger.error(f"Error during cognee.recall for query '{query}': {e}", exc_info=True)
