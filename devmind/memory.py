@@ -38,7 +38,13 @@ def load_api_keys():
     Supports a comma-separated list via GROQ_API_KEYS, falling back to GROQ_API_KEY.
     """
     global _GROQ_API_KEYS
-    load_dotenv(find_dotenv(usecwd=True))
+    
+    # Clean standard global env keys first to prevent OS contamination
+    for var in ["GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]:
+        if var in os.environ:
+            del os.environ[var]
+            
+    load_dotenv(find_dotenv(usecwd=True), override=True)
     
     # Read GROQ_API_KEYS comma-separated list
     keys_str = os.getenv("GROQ_API_KEYS", "")
@@ -81,7 +87,7 @@ def initialize_cognee():
     """
     Loads configuration from .env and verifies LLM & Embedding provider setup.
     """
-    load_dotenv(find_dotenv(usecwd=True))
+    load_dotenv(find_dotenv(usecwd=True), override=True)
     load_api_keys()
     
     # Disable backend access control and authentication for local CLI use
