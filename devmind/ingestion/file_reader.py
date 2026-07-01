@@ -1,4 +1,5 @@
 import os
+import re
 import pathlib
 import logging
 
@@ -44,6 +45,28 @@ EXPLICIT_FILES = {
     ".gitignore",
     ".env.example",
 }
+
+# Compiled regex patterns for common hardcoded secrets
+_SECRET_PATTERNS = [
+    # OpenAI API keys:  sk-<48 alphanumeric chars>
+    re.compile(r'sk-[a-zA-Z0-9]{48}'),
+    # Groq API keys:    gsk_<52 alphanumeric chars>
+    re.compile(r'gsk_[a-zA-Z0-9]{52}'),
+    # GitHub PATs:      ghp_<36 alphanumeric chars>
+    re.compile(r'ghp_[a-zA-Z0-9]{36}'),
+    # Generic secrets assigned to common variable names
+    re.compile(r'(?i)(?:api_key|api_secret|secret_key|password|passwd|token)\s*=\s*["\'][^"\']{8,}["\']'),
+]
+
+
+def scrub_secrets(content: str) -> str:
+    """
+    Replace common hardcoded secrets in file content with [REDACTED_SECRET]
+    before the content is sent to any external LLM API.
+    """
+    for pattern in _SECRET_PATTERNS:
+        content = pattern.sub('[REDACTED_SECRET]', content)
+    return content
 
 
 def _load_gitignore_spec(root_path: pathlib.Path):
@@ -115,6 +138,8 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
                     stripped_content = content.strip()
                     if not stripped_content or len(stripped_content) < 15:
                         continue
+
+                    content = scrub_secrets(content)
 
                     codebase_files.append({
                         "relative_path": str(relative_path),
