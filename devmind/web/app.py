@@ -36,7 +36,10 @@ async def read_index(request: Request):
     """
     Renders the DevMind UI dashboard.
     """
-    return templates.TemplateResponse("index.html", {"request": request})
+    try:
+        return templates.TemplateResponse(request=request, name="index.html")
+    except TypeError:
+        return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/api/ask")
 async def api_ask(payload: dict):
