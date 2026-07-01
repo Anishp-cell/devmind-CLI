@@ -44,10 +44,11 @@ def load_api_keys():
     if keys_str:
         _GROQ_API_KEYS = [k.strip() for k in keys_str.split(",") if k.strip()]
     
-    # Fallback to single GROQ_API_KEY if not already in the list
-    single_key = os.getenv("GROQ_API_KEY", "")
-    if single_key and single_key not in _GROQ_API_KEYS:
-        _GROQ_API_KEYS.append(single_key)
+    # Fallback to single GROQ_API_KEY only if no list keys were found
+    if not _GROQ_API_KEYS:
+        single_key = os.getenv("GROQ_API_KEY", "")
+        if single_key:
+            _GROQ_API_KEYS.append(single_key)
 
 def get_random_api_key() -> tuple[str, str, str]:
     """

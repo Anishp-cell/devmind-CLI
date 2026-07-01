@@ -87,27 +87,25 @@ async def remember_pipeline(directory: str):
     # 2. Extract and Ingest Git History
     git_logs = get_git_history(directory, max_commits=20)
     if git_logs:
-        typer.echo(f"Ingesting git history ({len(git_logs)} commits) into Cognee...")
-        git_success = 0
-        for idx, commit_log in enumerate(git_logs, start=1):
-            dataset_name = f"git_commit_{idx}"
-            success = await remember_content(commit_log, dataset_name=dataset_name)
-            if success:
-                git_success += 1
-        typer.echo(f"Successfully remembered {git_success}/{len(git_logs)} commits.")
+        typer.echo("Ingesting combined git history into Cognee...")
+        combined_git = "\n\n---\n\n".join(git_logs)
+        success = await remember_content(combined_git, dataset_name="git_history")
+        if success:
+            typer.echo("Successfully remembered git history.")
+        else:
+            typer.echo("[Warning] Failed to ingest git history.")
 
     # 3. Extract and Ingest Inline Comments & Docstrings
     relative_paths = [f["relative_path"] for f in files]
     comments = get_codebase_comments(directory, relative_paths)
     if comments:
-        typer.echo(f"Ingesting inline comments ({len(comments)} files containing comments)...")
-        comment_success = 0
-        for idx, comment_block in enumerate(comments, start=1):
-            dataset_name = f"code_comments_{idx}"
-            success = await remember_content(comment_block, dataset_name=dataset_name)
-            if success:
-                comment_success += 1
-        typer.echo(f"Successfully remembered {comment_success}/{len(comments)} comment segments.")
+        typer.echo("Ingesting combined inline comments into Cognee...")
+        combined_comments = "\n\n---\n\n".join(comments)
+        success = await remember_content(combined_comments, dataset_name="code_comments")
+        if success:
+            typer.echo("Successfully remembered code comments.")
+        else:
+            typer.echo("[Warning] Failed to ingest code comments.")
 
 @app.command()
 def remember(
