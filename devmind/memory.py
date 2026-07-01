@@ -1,7 +1,10 @@
 import os
+import sys
+import json
 import logging
 import random
 import asyncio
+import pathlib
 from dotenv import load_dotenv, find_dotenv
 
 # Set up logging
@@ -32,24 +35,59 @@ import cognee
 # Global list of keys for rotation
 _GROQ_API_KEYS = []
 
+def _get_global_config_path() -> pathlib.Path:
+    """
+    Returns the platform-appropriate path for the global DevMind config file.
+    - Windows:       C:\\Users\\<User>\\AppData\\Roaming\\devmind\\config.json
+    - macOS / Linux: ~/.config/devmind/config.json
+    """
+    if sys.platform == "win32":
+        base = pathlib.Path(os.environ.get("APPDATA", pathlib.Path.home() / "AppData" / "Roaming"))
+    else:
+        base = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config"))
+    return base / "devmind" / "config.json"
+
+
 def load_api_keys():
     """
     Loads all available Groq API keys from the environment.
     Supports a comma-separated list via GROQ_API_KEYS, falling back to GROQ_API_KEY.
+    If neither is present in the local .env, checks the global config file:
+      - macOS/Linux: ~/.config/devmind/config.json
+      - Windows:     %APPDATA%\\devmind\\config.json
     """
     global _GROQ_API_KEYS
     load_dotenv(find_dotenv(usecwd=True))
-    
-    # Read GROQ_API_KEYS comma-separated list
+
+    # 1. Try local .env — comma-separated list
     keys_str = os.getenv("GROQ_API_KEYS", "")
     if keys_str:
         _GROQ_API_KEYS = [k.strip() for k in keys_str.split(",") if k.strip()]
-    
-    # Fallback to single GROQ_API_KEY only if no list keys were found
+
+    # 2. Try local .env — single key fallback
     if not _GROQ_API_KEYS:
         single_key = os.getenv("GROQ_API_KEY", "")
         if single_key:
             _GROQ_API_KEYS.append(single_key)
+
+    # 3. Try global config file if still empty
+    if not _GROQ_API_KEYS:
+        config_path = _get_global_config_path()
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                global_keys_str = config.get("GROQ_API_KEYS", "")
+                if global_keys_str:
+                    _GROQ_API_KEYS = [k.strip() for k in global_keys_str.split(",") if k.strip()]
+                if not _GROQ_API_KEYS:
+                    single = config.get("GROQ_API_KEY", "")
+                    if single:
+                        _GROQ_API_KEYS.append(single)
+                if _GROQ_API_KEYS:
+                    logger.info(f"Loaded API keys from global config: {config_path}")
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Could not read global config at {config_path}: {e}")
 
 def get_random_api_key() -> tuple[str, str, str]:
     """
