@@ -2,14 +2,14 @@ import os
 import logging
 import random
 import asyncio
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("devmind.memory")
 
 # Load dotenv and set project-scoped directories BEFORE importing cognee
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True))
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 system_path = os.path.join(project_root, ".cognee_system")
@@ -37,7 +37,7 @@ def load_api_keys():
     Supports a comma-separated list via GROQ_API_KEYS, falling back to GROQ_API_KEY.
     """
     global _GROQ_API_KEYS
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
     
     # Read GROQ_API_KEYS comma-separated list
     keys_str = os.getenv("GROQ_API_KEYS", "")
@@ -79,7 +79,7 @@ def initialize_cognee():
     """
     Loads configuration from .env and verifies LLM & Embedding provider setup.
     """
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
     load_api_keys()
     
     # Disable backend access control and authentication for local CLI use
