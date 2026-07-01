@@ -80,6 +80,12 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         content = f.read()
                     
+                    # Skip empty or trivial files (e.g. empty __init__.py files)
+                    # to prevent LLM structured output validation failures in Cognee
+                    stripped_content = content.strip()
+                    if not stripped_content or len(stripped_content) < 15:
+                        continue
+                    
                     codebase_files.append({
                         "relative_path": str(relative_path),
                         "absolute_path": str(file_path),
