@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory
+from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history
 from devmind.ingestion.comment_extractor import get_codebase_comments
@@ -60,13 +60,17 @@ async def remember_pipeline(directory: str):
     Core async pipeline for scanning files, comments, and git logs,
     and loading them into Cognee.
     """
+    # Determine a single, unified dataset name based on the target folder
+    folder_name = os.path.basename(os.path.abspath(directory)).lower().replace("-", "_").replace(" ", "_")
+    dataset_name = f"devmind_{folder_name}"
+
     # 1. Scan the codebase files
     files = scan_codebase_files(directory)
     if not files:
         typer.echo("No files found to ingest.")
         return
         
-    typer.echo(f"Ingesting {len(files)} files into Cognee memory...")
+    typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name})...")
     
     # Ingest file contents
     file_success = 0
@@ -75,8 +79,6 @@ async def remember_pipeline(directory: str):
         content = file_data["content"]
         
         tagged_content = f"File Path: {rel_path}\n---\n{content}"
-        dataset_name = rel_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
-        
         logger.info(f"[{idx}/{len(files)}] Processing {rel_path}...")
         success = await remember_content(tagged_content, dataset_name=dataset_name)
         if success:
@@ -89,7 +91,7 @@ async def remember_pipeline(directory: str):
     if git_logs:
         typer.echo("Ingesting combined git history into Cognee...")
         combined_git = "\n\n---\n\n".join(git_logs)
-        success = await remember_content(combined_git, dataset_name="git_history")
+        success = await remember_content(combined_git, dataset_name=dataset_name)
         if success:
             typer.echo("Successfully remembered git history.")
         else:
@@ -101,7 +103,7 @@ async def remember_pipeline(directory: str):
     if comments:
         typer.echo("Ingesting combined inline comments into Cognee...")
         combined_comments = "\n\n---\n\n".join(comments)
-        success = await remember_content(combined_comments, dataset_name="code_comments")
+        success = await remember_content(combined_comments, dataset_name=dataset_name)
         if success:
             typer.echo("Successfully remembered code comments.")
         else:
@@ -249,9 +251,8 @@ def forget(
         return
         
     if file_path:
-        dataset_name = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
-        typer.echo(f"Removing memory dataset '{dataset_name}'...")
-        success = run_async(forget_memory(dataset_name))
+        typer.echo(f"Removing memory nodes for '{file_path}'...")
+        success = run_async(forget_file_nodes(file_path))
         if success:
             typer.echo(f"[Success] Memory of '{file_path}' successfully forgotten.")
         else:

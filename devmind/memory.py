@@ -1,7 +1,10 @@
 import os
+import sys
+import json
 import logging
 import random
 import asyncio
+import pathlib
 from dotenv import load_dotenv, find_dotenv
 
 # Set up logging
@@ -32,24 +35,58 @@ import cognee
 # Global list of keys for rotation
 _GROQ_API_KEYS = []
 
+def _get_global_config_path() -> pathlib.Path:
+    """
+    Returns the platform-appropriate path for the global DevMind config file.
+    - Windows:       C:\\Users\\<User>\\AppData\\Roaming\\devmind\\config.json
+    - macOS / Linux: ~/.config/devmind/config.json
+    """
+    if sys.platform == "win32":
+        base = pathlib.Path(os.environ.get("APPDATA", pathlib.Path.home() / "AppData" / "Roaming"))
+    else:
+        base = pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config"))
+    return base / "devmind" / "config.json"
+
+
 def load_api_keys():
     """
     Loads all available Groq API keys from the environment.
     Supports a comma-separated list via GROQ_API_KEYS, falling back to GROQ_API_KEY.
+    If neither is present in the local .env, checks the global config file:
+      - macOS/Linux: ~/.config/devmind/config.json
+      - Windows:     %APPDATA%\\devmind\\config.json
     """
     global _GROQ_API_KEYS
     load_dotenv(find_dotenv(usecwd=True))
-    
-    # Read GROQ_API_KEYS comma-separated list
+    # 1. Try local .env — comma-separated list
     keys_str = os.getenv("GROQ_API_KEYS", "")
     if keys_str:
         _GROQ_API_KEYS = [k.strip() for k in keys_str.split(",") if k.strip()]
-    
-    # Fallback to single GROQ_API_KEY only if no list keys were found
+
+    # 2. Try local .env — single key fallback
     if not _GROQ_API_KEYS:
         single_key = os.getenv("GROQ_API_KEY", "")
         if single_key:
             _GROQ_API_KEYS.append(single_key)
+
+    # 3. Try global config file if still empty
+    if not _GROQ_API_KEYS:
+        config_path = _get_global_config_path()
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                global_keys_str = config.get("GROQ_API_KEYS", "")
+                if global_keys_str:
+                    _GROQ_API_KEYS = [k.strip() for k in global_keys_str.split(",") if k.strip()]
+                if not _GROQ_API_KEYS:
+                    single = config.get("GROQ_API_KEY", "")
+                    if single:
+                        _GROQ_API_KEYS.append(single)
+                if _GROQ_API_KEYS:
+                    logger.info(f"Loaded API keys from global config: {config_path}")
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Could not read global config at {config_path}: {e}")
 
 def get_random_api_key() -> tuple[str, str, str]:
     """
@@ -190,24 +227,22 @@ async def recall_query(query: str) -> str:
                 cognee.config.set_llm_model(model)
 
         logger.info(f"Recalling memory for query: '{query}'...")
-        datasets = await get_all_dataset_names()
+        
+        # Target only the active project directory's unified dataset
+        current_dir = os.getcwd()
+        folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
+        target_dataset = f"devmind_{folder_name}"
+        
         from cognee.modules.search.types import SearchType
         query_type = SearchType.RAG_COMPLETION
+        top_k = int(os.getenv("DEVMIND_RECALL_TOP_K", "3"))
         
-        if datasets:
-            logger.info(f"Searching across datasets individually in parallel: {datasets}")
-            # Query each dataset in parallel to bypass Cognee's single-dataset check
-            tasks = [cognee.recall(query_text=query, query_type=query_type, datasets=[d]) for d in datasets]
-            results_lists = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            results = []
-            for r_list in results_lists:
-                if isinstance(r_list, list):
-                    results.extend(r_list)
-                elif isinstance(r_list, Exception):
-                    logger.warning(f"Error recalling from a dataset partition: {r_list}")
-        else:
-            results = await cognee.recall(query_text=query, query_type=query_type)
+        logger.info(f"Searching memory dataset '{target_dataset}' (top_k={top_k})...")
+        try:
+            results = await cognee.recall(query_text=query, query_type=query_type, datasets=[target_dataset], top_k=top_k)
+        except Exception as ex:
+            logger.warning(f"Dataset partition '{target_dataset}' query failed: {ex}. Falling back to default recall.")
+            results = await cognee.recall(query_text=query, query_type=query_type, top_k=top_k)
             
         if not results:
             return "No relevant memories found."
@@ -271,3 +306,82 @@ async def forget_memory(dataset_name: str) -> bool:
             return True
         logger.error(f"Error during cognee.forget for '{dataset_name}': {e}", exc_info=True)
         return False
+
+
+async def forget_file_nodes(relative_path: str) -> bool:
+    """
+    Surgically removes data records and associated graph nodes for a specific
+    file from Cognee memory.
+
+    Works in both ingestion modes:
+    - Unified dataset (all files in one dataset): matches by the 'File Path:'
+      prefix tag written by the remember pipeline, deleting the Data records
+      and pruning their graph nodes via Cognee's relational + graph engines.
+    - Legacy per-file datasets: falls back to deleting the derived dataset name.
+    """
+    deleted_anything = False
+
+    # --- Strategy 1: delete Data records matching the file path tag ---
+    try:
+        from cognee.infrastructure.databases.relational import get_relational_engine
+        from sqlalchemy import select, delete
+
+        # Try known Cognee data-layer model names (varies by version)
+        data_model = None
+        for model_path in (
+            "cognee.modules.data.models.Data",
+            "cognee.modules.data.models.DataPoint",
+            "cognee.modules.data.models.Document",
+        ):
+            try:
+                module_path, cls_name = model_path.rsplit(".", 1)
+                import importlib
+                mod = importlib.import_module(module_path)
+                data_model = getattr(mod, cls_name, None)
+                if data_model is not None:
+                    break
+            except Exception:
+                continue
+
+        if data_model is not None:
+            engine = get_relational_engine()
+            # Match on the tagged prefix injected during ingestion:
+            #   "File Path: <relative_path>\n---\n..."
+            search_tag = f"File Path: {relative_path}"
+            async with engine.get_async_session() as session:
+                # Find matching records
+                stmt = select(data_model)
+                results = (await session.execute(stmt)).scalars().all()
+                matching_ids = [
+                    r.id for r in results
+                    if (hasattr(r, "content") and r.content and search_tag in r.content)
+                    or (hasattr(r, "name") and r.name and relative_path in r.name)
+                ]
+
+                if matching_ids:
+                    del_stmt = delete(data_model).where(data_model.id.in_(matching_ids))
+                    await session.execute(del_stmt)
+                    await session.commit()
+                    logger.info(f"Deleted {len(matching_ids)} data record(s) for '{relative_path}'.")
+                    deleted_anything = True
+                else:
+                    logger.info(f"No data records found matching '{relative_path}' in unified dataset.")
+    except Exception as e:
+        logger.warning(f"Strategy 1 (data record deletion) failed for '{relative_path}': {e}")
+
+    # --- Strategy 2: legacy per-file dataset name deletion (backward compat) ---
+    try:
+        legacy_dataset = (
+            relative_path
+            .replace("/", "_")
+            .replace("\\", "_")
+            .replace(".", "_")
+            .replace(" ", "_")
+        )
+        result = await forget_memory(legacy_dataset)
+        if result:
+            deleted_anything = True
+    except Exception as e:
+        logger.warning(f"Strategy 2 (legacy dataset deletion) failed for '{relative_path}': {e}")
+
+    return deleted_anything

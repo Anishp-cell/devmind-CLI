@@ -1,6 +1,12 @@
 import os
+import re
 import pathlib
 import logging
+
+try:
+    import pathspec
+except ImportError:
+    pathspec = None
 
 logger = logging.getLogger("devmind.ingestion.file_reader")
 
@@ -40,6 +46,45 @@ EXPLICIT_FILES = {
     ".env.example",
 }
 
+# Compiled regex patterns for common hardcoded secrets
+_SECRET_PATTERNS = [
+    # OpenAI API keys:  sk-<48 alphanumeric chars>
+    re.compile(r'sk-[a-zA-Z0-9]{48}'),
+    # Groq API keys:    gsk_<52 alphanumeric chars>
+    re.compile(r'gsk_[a-zA-Z0-9]{52}'),
+    # GitHub PATs:      ghp_<36 alphanumeric chars>
+    re.compile(r'ghp_[a-zA-Z0-9]{36}'),
+    # Generic secrets assigned to common variable names
+    re.compile(r'(?i)(?:api_key|api_secret|secret_key|password|passwd|token)\s*=\s*["\'][^"\']{8,}["\']'),
+]
+
+
+def scrub_secrets(content: str) -> str:
+    """
+    Replace common hardcoded secrets in file content with [REDACTED_SECRET]
+    before the content is sent to any external LLM API.
+    """
+    for pattern in _SECRET_PATTERNS:
+        content = pattern.sub('[REDACTED_SECRET]', content)
+    return content
+
+
+def _load_gitignore_spec(root_path: pathlib.Path):
+    """
+    Load and compile .gitignore rules from the root directory.
+    Returns a pathspec.PathSpec instance, or None if unavailable.
+    """
+    if pathspec is None:
+        logger.warning("pathspec package not installed; .gitignore rules will not be applied.")
+        return None
+    gitignore_path = root_path / ".gitignore"
+    if not gitignore_path.exists():
+        return None
+    with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+    return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+
+
 def is_text_file(file_path: pathlib.Path) -> bool:
     """
     Check if a file should be read by extension or filename.
@@ -64,28 +109,38 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
     """
     root_path = pathlib.Path(root_dir).resolve()
     logger.info(f"Scanning codebase files under: {root_path}")
-    
+
+    gitignore_spec = _load_gitignore_spec(root_path)
+
     codebase_files = []
-    
+
     for dirpath, dirnames, filenames in os.walk(root_path):
-        # Modify dirnames in place to skip ignored directories
+        # Modify dirnames in place to skip hardcoded ignored directories
         dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
-        
+
         for filename in filenames:
             file_path = pathlib.Path(dirpath) / filename
-            
+
             if is_text_file(file_path):
                 relative_path = file_path.relative_to(root_path)
+
+                # Skip files matched by .gitignore rules (using POSIX path formatting for cross-platform matching)
+                if gitignore_spec and gitignore_spec.match_file(relative_path.as_posix()):
+                    logger.debug(f"Skipping .gitignore-matched file: {relative_path}")
+                    continue
+
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         content = f.read()
-                    
+
                     # Skip empty or trivial files (e.g. empty __init__.py files)
                     # to prevent LLM structured output validation failures in Cognee
                     stripped_content = content.strip()
                     if not stripped_content or len(stripped_content) < 15:
                         continue
-                    
+
+                    content = scrub_secrets(content)
+
                     codebase_files.append({
                         "relative_path": str(relative_path),
                         "absolute_path": str(file_path),
