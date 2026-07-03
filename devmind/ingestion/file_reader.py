@@ -124,8 +124,8 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
             if is_text_file(file_path):
                 relative_path = file_path.relative_to(root_path)
 
-                # Skip files matched by .gitignore rules
-                if gitignore_spec and gitignore_spec.match_file(str(relative_path)):
+                # Skip files matched by .gitignore rules (using POSIX path formatting for cross-platform matching)
+                if gitignore_spec and gitignore_spec.match_file(relative_path.as_posix()):
                     logger.debug(f"Skipping .gitignore-matched file: {relative_path}")
                     continue
 

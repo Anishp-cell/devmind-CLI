@@ -60,13 +60,17 @@ async def remember_pipeline(directory: str):
     Core async pipeline for scanning files, comments, and git logs,
     and loading them into Cognee.
     """
+    # Determine a single, unified dataset name based on the target folder
+    folder_name = os.path.basename(os.path.abspath(directory)).lower().replace("-", "_").replace(" ", "_")
+    dataset_name = f"devmind_{folder_name}"
+
     # 1. Scan the codebase files
     files = scan_codebase_files(directory)
     if not files:
         typer.echo("No files found to ingest.")
         return
         
-    typer.echo(f"Ingesting {len(files)} files into Cognee memory...")
+    typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name})...")
     
     # Ingest file contents
     file_success = 0
@@ -75,8 +79,6 @@ async def remember_pipeline(directory: str):
         content = file_data["content"]
         
         tagged_content = f"File Path: {rel_path}\n---\n{content}"
-        dataset_name = rel_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
-        
         logger.info(f"[{idx}/{len(files)}] Processing {rel_path}...")
         success = await remember_content(tagged_content, dataset_name=dataset_name)
         if success:
@@ -89,7 +91,7 @@ async def remember_pipeline(directory: str):
     if git_logs:
         typer.echo("Ingesting combined git history into Cognee...")
         combined_git = "\n\n---\n\n".join(git_logs)
-        success = await remember_content(combined_git, dataset_name="git_history")
+        success = await remember_content(combined_git, dataset_name=dataset_name)
         if success:
             typer.echo("Successfully remembered git history.")
         else:
@@ -101,7 +103,7 @@ async def remember_pipeline(directory: str):
     if comments:
         typer.echo("Ingesting combined inline comments into Cognee...")
         combined_comments = "\n\n---\n\n".join(comments)
-        success = await remember_content(combined_comments, dataset_name="code_comments")
+        success = await remember_content(combined_comments, dataset_name=dataset_name)
         if success:
             typer.echo("Successfully remembered code comments.")
         else:
