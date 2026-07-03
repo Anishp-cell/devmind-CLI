@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory
+from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history
 from devmind.ingestion.comment_extractor import get_codebase_comments
@@ -249,9 +249,8 @@ def forget(
         return
         
     if file_path:
-        dataset_name = file_path.replace("/", "_").replace("\\", "_").replace(".", "_").replace(" ", "_")
-        typer.echo(f"Removing memory dataset '{dataset_name}'...")
-        success = run_async(forget_memory(dataset_name))
+        typer.echo(f"Removing memory nodes for '{file_path}'...")
+        success = run_async(forget_file_nodes(file_path))
         if success:
             typer.echo(f"[Success] Memory of '{file_path}' successfully forgotten.")
         else:

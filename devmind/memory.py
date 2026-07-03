@@ -309,3 +309,82 @@ async def forget_memory(dataset_name: str) -> bool:
             return True
         logger.error(f"Error during cognee.forget for '{dataset_name}': {e}", exc_info=True)
         return False
+
+
+async def forget_file_nodes(relative_path: str) -> bool:
+    """
+    Surgically removes data records and associated graph nodes for a specific
+    file from Cognee memory.
+
+    Works in both ingestion modes:
+    - Unified dataset (all files in one dataset): matches by the 'File Path:'
+      prefix tag written by the remember pipeline, deleting the Data records
+      and pruning their graph nodes via Cognee's relational + graph engines.
+    - Legacy per-file datasets: falls back to deleting the derived dataset name.
+    """
+    deleted_anything = False
+
+    # --- Strategy 1: delete Data records matching the file path tag ---
+    try:
+        from cognee.infrastructure.databases.relational import get_relational_engine
+        from sqlalchemy import select, delete
+
+        # Try known Cognee data-layer model names (varies by version)
+        data_model = None
+        for model_path in (
+            "cognee.modules.data.models.Data",
+            "cognee.modules.data.models.DataPoint",
+            "cognee.modules.data.models.Document",
+        ):
+            try:
+                module_path, cls_name = model_path.rsplit(".", 1)
+                import importlib
+                mod = importlib.import_module(module_path)
+                data_model = getattr(mod, cls_name, None)
+                if data_model is not None:
+                    break
+            except Exception:
+                continue
+
+        if data_model is not None:
+            engine = get_relational_engine()
+            # Match on the tagged prefix injected during ingestion:
+            #   "File Path: <relative_path>\n---\n..."
+            search_tag = f"File Path: {relative_path}"
+            async with engine.get_async_session() as session:
+                # Find matching records
+                stmt = select(data_model)
+                results = (await session.execute(stmt)).scalars().all()
+                matching_ids = [
+                    r.id for r in results
+                    if (hasattr(r, "content") and r.content and search_tag in r.content)
+                    or (hasattr(r, "name") and r.name and relative_path in r.name)
+                ]
+
+                if matching_ids:
+                    del_stmt = delete(data_model).where(data_model.id.in_(matching_ids))
+                    await session.execute(del_stmt)
+                    await session.commit()
+                    logger.info(f"Deleted {len(matching_ids)} data record(s) for '{relative_path}'.")
+                    deleted_anything = True
+                else:
+                    logger.info(f"No data records found matching '{relative_path}' in unified dataset.")
+    except Exception as e:
+        logger.warning(f"Strategy 1 (data record deletion) failed for '{relative_path}': {e}")
+
+    # --- Strategy 2: legacy per-file dataset name deletion (backward compat) ---
+    try:
+        legacy_dataset = (
+            relative_path
+            .replace("/", "_")
+            .replace("\\", "_")
+            .replace(".", "_")
+            .replace(" ", "_")
+        )
+        result = await forget_memory(legacy_dataset)
+        if result:
+            deleted_anything = True
+    except Exception as e:
+        logger.warning(f"Strategy 2 (legacy dataset deletion) failed for '{relative_path}': {e}")
+
+    return deleted_anything
