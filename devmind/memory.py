@@ -216,7 +216,7 @@ def initialize_cognee():
         cognee.config.set_llm_provider("custom")
         cognee.config.set_llm_endpoint("https://generativelanguage.googleapis.com/v1beta/openai/")
         cognee.config.set_llm_api_key(gemini_key)
-        model = os.getenv("LLM_MODEL", "gemini-2.5-flash-lite")
+        model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
         if not model.startswith("openai/"):
             model = f"openai/{model}"
         cognee.config.set_llm_model(model)
