@@ -206,6 +206,8 @@ def initialize_cognee():
         cognee.config.set_llm_endpoint("https://generativelanguage.googleapis.com/v1beta/openai/")
         cognee.config.set_llm_api_key(gemini_key)
         model = os.getenv("LLM_MODEL", "gemini-2.5-flash-lite")
+        if not model.startswith("openai/"):
+            model = f"openai/{model}"
         cognee.config.set_llm_model(model)
         if not gemini_key:
             logger.warning("[Warning] No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY to query or ingest.")
@@ -257,6 +259,7 @@ async def remember_content(content: str, dataset_name: str) -> bool:
                 logger.error("No Gemini API keys available. Aborting memory ingestion.")
                 return False
             os.environ["LLM_API_KEY"] = gemini_key
+            os.environ["CUSTOM_API_KEY"] = gemini_key
             cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Remembering content in dataset '{dataset_name}'...")
@@ -306,6 +309,7 @@ async def recall_query(query: str) -> str:
             if not gemini_key:
                 return "Error: No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY before querying."
             os.environ["LLM_API_KEY"] = gemini_key
+            os.environ["CUSTOM_API_KEY"] = gemini_key
             cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Recalling memory for query: '{query}'...")
