@@ -173,9 +173,16 @@ def initialize_cognee():
     # Disable backend access control and authentication for local CLI use
     os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
     
-    # Disable database subprocesses to prevent multiprocessing deadlocks and hangs on Windows
-    cognee.config.set_graph_database_subprocess_enabled(False)
-    cognee.config.set_vector_db_subprocess_enabled(False)
+    # Disable database subprocesses via env vars BEFORE Cognee constructs its
+    # @lru_cache'd pydantic config singletons. The cognee.config.set_*() API
+    # calls are unreliable because GraphConfig / VectorConfig may already be
+    # cached with subprocess_enabled=True by the time we call them.
+    os.environ["GRAPH_DATABASE_SUBPROCESS_ENABLED"] = "false"
+    os.environ["VECTOR_DB_SUBPROCESS_ENABLED"] = "false"
+    
+    # Skip Cognee's internal LLM connection test (30s timeout) — we already
+    # verified the endpoint works and this avoids wasting a cold-start API call.
+    os.environ["COGNEE_SKIP_CONNECTION_TEST"] = "true"
     
     # Apply storage paths to Cognee configuration
     cognee.config.system_root_directory(system_path)
