@@ -303,9 +303,9 @@ def initialize_cognee():
     logger.info(f"System Storage Path: {system_path}")
     logger.info(f"Data Storage Path: {data_path}")
 
-async def remember_content(content: str, dataset_name: str) -> bool:
+async def remember_content(content: str | list[str], dataset_name: str) -> bool:
     """
-    Ingests text content into Cognee memory under a specified dataset name.
+    Ingests text content or a list of contents into Cognee memory under a specified dataset name.
     """
     try:
         # Per-call key rotation is now handled by the litellm monkey-patch

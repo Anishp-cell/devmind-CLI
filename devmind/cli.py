@@ -72,19 +72,21 @@ async def remember_pipeline(directory: str):
         
     typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name})...")
     
-    # Ingest file contents
-    file_success = 0
+    # Ingest file contents in a single batch
+    contents = []
     for idx, file_data in enumerate(files, start=1):
         rel_path = file_data["relative_path"]
         content = file_data["content"]
         
         tagged_content = f"File Path: {rel_path}\n---\n{content}"
-        logger.info(f"[{idx}/{len(files)}] Processing {rel_path}...")
-        success = await remember_content(tagged_content, dataset_name=dataset_name)
-        if success:
-            file_success += 1
-            
-    typer.echo(f"Successfully remembered {file_success}/{len(files)} files.")
+        contents.append(tagged_content)
+        
+    logger.info(f"Batched {len(contents)} files. Triggering ingestion pipeline...")
+    success = await remember_content(contents, dataset_name=dataset_name)
+    if success:
+        typer.echo(f"Successfully remembered {len(files)} files.")
+    else:
+        typer.echo(f"[Warning] Failed to ingest files.")
 
     # 2. Extract and Ingest Git History
     git_logs = get_git_history(directory, max_commits=20)
