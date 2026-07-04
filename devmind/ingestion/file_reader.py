@@ -54,6 +54,8 @@ _SECRET_PATTERNS = [
     re.compile(r'gsk_[a-zA-Z0-9]{52}'),
     # GitHub PATs:      ghp_<36 alphanumeric chars>
     re.compile(r'ghp_[a-zA-Z0-9]{36}'),
+    # Google/Gemini keys: AIzaSy<35 alphanumeric chars>
+    re.compile(r'AIzaSy[a-zA-Z0-9_-]{35}'),
     # Generic secrets assigned to common variable names
     re.compile(r'(?i)(?:api_key|api_secret|secret_key|password|passwd|token)\s*=\s*["\'][^"\']{8,}["\']'),
 ]

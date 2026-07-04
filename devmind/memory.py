@@ -34,6 +34,7 @@ import cognee
 
 # Global list of keys for rotation
 _GROQ_API_KEYS = []
+_GEMINI_API_KEYS = []
 
 def get_project_root(start_dir: str = None) -> str:
     """
@@ -65,24 +66,29 @@ def _get_global_config_path() -> pathlib.Path:
 
 def load_api_keys():
     """
-    Loads all available Groq API keys from the environment.
-    Supports a comma-separated list via GROQ_API_KEYS, falling back to GROQ_API_KEY.
-    If neither is present in the local .env, checks the global config file:
-      - macOS/Linux: ~/.config/devmind/config.json
-      - Windows:     %APPDATA%\\devmind\\config.json
+    Loads all available Groq and Gemini API keys from the environment.
+    Supports comma-separated lists and global configs.
     """
-    global _GROQ_API_KEYS
+    global _GROQ_API_KEYS, _GEMINI_API_KEYS
     load_dotenv(find_dotenv(usecwd=True))
-    # 1. Try local .env — comma-separated list
+    
+    # 1. Load Groq Keys
     keys_str = os.getenv("GROQ_API_KEYS", "")
     if keys_str:
         _GROQ_API_KEYS = [k.strip() for k in keys_str.split(",") if k.strip()]
-
-    # 2. Try local .env — single key fallback
     if not _GROQ_API_KEYS:
         single_key = os.getenv("GROQ_API_KEY", "")
         if single_key:
             _GROQ_API_KEYS.append(single_key)
+
+    # 2. Load Gemini Keys
+    gemini_str = os.getenv("GEMINI_API_KEYS", "")
+    if gemini_str:
+        _GEMINI_API_KEYS = [k.strip() for k in gemini_str.split(",") if k.strip()]
+    if not _GEMINI_API_KEYS:
+        single_gemini = os.getenv("GEMINI_API_KEY", "")
+        if single_gemini:
+            _GEMINI_API_KEYS.append(single_gemini)
 
     # 3. Load global config file to inject configurations and fallback keys
     config_path = _get_global_config_path()
@@ -104,6 +110,15 @@ def load_api_keys():
                     single = config.get("GROQ_API_KEY", "")
                     if single:
                         _GROQ_API_KEYS.append(single)
+
+            if not _GEMINI_API_KEYS:
+                global_gemini_str = config.get("GEMINI_API_KEYS", "")
+                if global_gemini_str:
+                    _GEMINI_API_KEYS = [k.strip() for k in global_gemini_str.split(",") if k.strip()]
+                if not _GEMINI_API_KEYS:
+                    single = config.get("GEMINI_API_KEY", "")
+                    if single:
+                        _GEMINI_API_KEYS.append(single)
             logger.info(f"Loaded configurations and fallback keys from global config: {config_path}")
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"Could not read global config at {config_path}: {e}")
@@ -133,6 +148,20 @@ def get_random_api_key() -> tuple[str, str, str]:
         masked = "***"
     logger.info(f"Rotating LLM request key -> {masked} ({provider_name} key, model: {model})")
     return selected_key, endpoint, model
+
+def get_random_gemini_key() -> str:
+    """
+    Selects a random Gemini API key from the list.
+    """
+    if not _GEMINI_API_KEYS:
+        return ""
+    selected_key = random.choice(_GEMINI_API_KEYS)
+    if len(selected_key) > 10:
+        masked = f"{selected_key[:6]}...{selected_key[-4:]}"
+    else:
+        masked = "***"
+    logger.info(f"Rotating Gemini LLM request key -> {masked}")
+    return selected_key
 
 def initialize_cognee():
     """
@@ -166,6 +195,20 @@ def initialize_cognee():
         cognee.config.set_llm_model(model)
         if not groq_key:
             logger.warning("[Warning] No Groq API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY to query or ingest.")
+    elif llm_provider == "gemini":
+        gemini_key = get_random_gemini_key()
+        os.environ["LLM_PROVIDER"] = "custom"
+        os.environ["LLM_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        os.environ["LLM_API_KEY"] = gemini_key
+        os.environ["DEVMIND_GEMINI_ROTATION_ACTIVE"] = "true"
+        
+        cognee.config.set_llm_provider("custom")
+        cognee.config.set_llm_endpoint("https://generativelanguage.googleapis.com/v1beta/openai/")
+        cognee.config.set_llm_api_key(gemini_key)
+        model = os.getenv("LLM_MODEL", "gemini-2.5-flash-lite")
+        cognee.config.set_llm_model(model)
+        if not gemini_key:
+            logger.warning("[Warning] No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY to query or ingest.")
     else:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         endpoint = os.getenv("LLM_ENDPOINT")
@@ -208,6 +251,13 @@ async def remember_content(content: str, dataset_name: str) -> bool:
             cognee.config.set_llm_endpoint(endpoint)
             cognee.config.set_llm_api_key(groq_key)
             cognee.config.set_llm_model(model)
+        elif os.getenv("DEVMIND_GEMINI_ROTATION_ACTIVE") == "true":
+            gemini_key = get_random_gemini_key()
+            if not gemini_key:
+                logger.error("No Gemini API keys available. Aborting memory ingestion.")
+                return False
+            os.environ["LLM_API_KEY"] = gemini_key
+            cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Remembering content in dataset '{dataset_name}'...")
         await cognee.remember(content, dataset_name=dataset_name)
@@ -251,6 +301,12 @@ async def recall_query(query: str) -> str:
             cognee.config.set_llm_endpoint(endpoint)
             cognee.config.set_llm_api_key(groq_key)
             cognee.config.set_llm_model(model)
+        elif os.getenv("DEVMIND_GEMINI_ROTATION_ACTIVE") == "true":
+            gemini_key = get_random_gemini_key()
+            if not gemini_key:
+                return "Error: No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY before querying."
+            os.environ["LLM_API_KEY"] = gemini_key
+            cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Recalling memory for query: '{query}'...")
         
