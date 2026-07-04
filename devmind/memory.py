@@ -4,6 +4,8 @@ import json
 import logging
 import random
 import asyncio
+import itertools
+import time
 import pathlib
 from dotenv import load_dotenv, find_dotenv
 
@@ -34,6 +36,71 @@ import cognee
 
 # Global list of keys for rotation
 _GROQ_API_KEYS = []
+_GEMINI_API_KEYS = []
+
+# ─── Per-call litellm monkey-patch for API key rotation ──────────────────
+# Cognee's GenericAPIAdapter stores api_key at construction time and passes
+# the SAME key to every litellm.acompletion() call.  With free-tier Gemini
+# (20 RPD per project), we burn through the quota in seconds because Cognee
+# fires many parallel LLM calls per single remember() invocation.
+#
+# Solution: monkey-patch litellm.acompletion so that EVERY call gets a fresh
+# key from a round-robin cycle across all 7 project keys.
+_litellm_original_acompletion = None
+_key_cycle = None
+_last_call_time = 0.0
+_MIN_CALL_INTERVAL = 4.5  # seconds between calls (≈13 RPM, well under free-tier limits)
+
+def _install_litellm_key_rotation(keys: list):
+    """Monkey-patch litellm.acompletion to rotate API keys on every call."""
+    import litellm
+    global _litellm_original_acompletion, _key_cycle
+    
+    if _litellm_original_acompletion is not None:
+        return  # Already patched
+    
+    _litellm_original_acompletion = litellm.acompletion
+    _key_cycle = itertools.cycle(keys)
+    
+    async def _rotating_acompletion(*args, **kwargs):
+        global _last_call_time
+        
+        # Rate-limit: enforce minimum interval between calls
+        now = time.monotonic()
+        elapsed = now - _last_call_time
+        if elapsed < _MIN_CALL_INTERVAL:
+            await asyncio.sleep(_MIN_CALL_INTERVAL - elapsed)
+        _last_call_time = time.monotonic()
+        
+        # Rotate to next API key
+        next_key = next(_key_cycle)
+        kwargs['api_key'] = next_key
+        
+        if len(next_key) > 10:
+            masked = f"{next_key[:6]}...{next_key[-4:]}"
+        else:
+            masked = "***"
+        logger.debug(f"litellm call → rotated key {masked}")
+        
+        return await _litellm_original_acompletion(*args, **kwargs)
+    
+    litellm.acompletion = _rotating_acompletion
+    logger.info(f"Installed litellm key rotation with {len(keys)} keys (interval: {_MIN_CALL_INTERVAL}s)")
+
+def get_project_root(start_dir: str = None) -> str:
+    """
+    Finds the nearest parent directory that contains a project marker (.git, .env, pyproject.toml, or setup.py).
+    Falls back to start_dir if none found.
+    """
+    curr = os.path.abspath(start_dir or os.getcwd())
+    while True:
+        if any(os.path.exists(os.path.join(curr, marker)) for marker in (".git", ".env", "pyproject.toml", "setup.py")):
+            return curr
+        parent = os.path.dirname(curr)
+        if parent == curr:
+            break
+        curr = parent
+    return os.path.abspath(start_dir or os.getcwd())
 
 def _get_global_config_path() -> pathlib.Path:
     """
@@ -50,32 +117,43 @@ def _get_global_config_path() -> pathlib.Path:
 
 def load_api_keys():
     """
-    Loads all available Groq API keys from the environment.
-    Supports a comma-separated list via GROQ_API_KEYS, falling back to GROQ_API_KEY.
-    If neither is present in the local .env, checks the global config file:
-      - macOS/Linux: ~/.config/devmind/config.json
-      - Windows:     %APPDATA%\\devmind\\config.json
+    Loads all available Groq and Gemini API keys from the environment.
+    Supports comma-separated lists and global configs.
     """
-    global _GROQ_API_KEYS
+    global _GROQ_API_KEYS, _GEMINI_API_KEYS
     load_dotenv(find_dotenv(usecwd=True))
-    # 1. Try local .env — comma-separated list
+    
+    # 1. Load Groq Keys
     keys_str = os.getenv("GROQ_API_KEYS", "")
     if keys_str:
         _GROQ_API_KEYS = [k.strip() for k in keys_str.split(",") if k.strip()]
-
-    # 2. Try local .env — single key fallback
     if not _GROQ_API_KEYS:
         single_key = os.getenv("GROQ_API_KEY", "")
         if single_key:
             _GROQ_API_KEYS.append(single_key)
 
-    # 3. Try global config file if still empty
-    if not _GROQ_API_KEYS:
-        config_path = _get_global_config_path()
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
+    # 2. Load Gemini Keys
+    gemini_str = os.getenv("GEMINI_API_KEYS", "")
+    if gemini_str:
+        _GEMINI_API_KEYS = [k.strip() for k in gemini_str.split(",") if k.strip()]
+    if not _GEMINI_API_KEYS:
+        single_gemini = os.getenv("GEMINI_API_KEY", "")
+        if single_gemini:
+            _GEMINI_API_KEYS.append(single_gemini)
+
+    # 3. Load global config file to inject configurations and fallback keys
+    config_path = _get_global_config_path()
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            
+            # Cascading global configurations into os.environ
+            for key, val in config.items():
+                if key not in os.environ and val is not None:
+                    os.environ[key] = str(val)
+                    
+            if not _GROQ_API_KEYS:
                 global_keys_str = config.get("GROQ_API_KEYS", "")
                 if global_keys_str:
                     _GROQ_API_KEYS = [k.strip() for k in global_keys_str.split(",") if k.strip()]
@@ -83,10 +161,18 @@ def load_api_keys():
                     single = config.get("GROQ_API_KEY", "")
                     if single:
                         _GROQ_API_KEYS.append(single)
-                if _GROQ_API_KEYS:
-                    logger.info(f"Loaded API keys from global config: {config_path}")
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Could not read global config at {config_path}: {e}")
+
+            if not _GEMINI_API_KEYS:
+                global_gemini_str = config.get("GEMINI_API_KEYS", "")
+                if global_gemini_str:
+                    _GEMINI_API_KEYS = [k.strip() for k in global_gemini_str.split(",") if k.strip()]
+                if not _GEMINI_API_KEYS:
+                    single = config.get("GEMINI_API_KEY", "")
+                    if single:
+                        _GEMINI_API_KEYS.append(single)
+            logger.info(f"Loaded configurations and fallback keys from global config: {config_path}")
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Could not read global config at {config_path}: {e}")
 
 def get_random_api_key() -> tuple[str, str, str]:
     """
@@ -114,6 +200,20 @@ def get_random_api_key() -> tuple[str, str, str]:
     logger.info(f"Rotating LLM request key -> {masked} ({provider_name} key, model: {model})")
     return selected_key, endpoint, model
 
+def get_random_gemini_key() -> str:
+    """
+    Selects a random Gemini API key from the list.
+    """
+    if not _GEMINI_API_KEYS:
+        return ""
+    selected_key = random.choice(_GEMINI_API_KEYS)
+    if len(selected_key) > 10:
+        masked = f"{selected_key[:6]}...{selected_key[-4:]}"
+    else:
+        masked = "***"
+    logger.info(f"Rotating Gemini LLM request key -> {masked}")
+    return selected_key
+
 def initialize_cognee():
     """
     Loads configuration from .env and verifies LLM & Embedding provider setup.
@@ -123,6 +223,17 @@ def initialize_cognee():
     
     # Disable backend access control and authentication for local CLI use
     os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
+    
+    # Disable database subprocesses via env vars BEFORE Cognee constructs its
+    # @lru_cache'd pydantic config singletons. The cognee.config.set_*() API
+    # calls are unreliable because GraphConfig / VectorConfig may already be
+    # cached with subprocess_enabled=True by the time we call them.
+    os.environ["GRAPH_DATABASE_SUBPROCESS_ENABLED"] = "false"
+    os.environ["VECTOR_DB_SUBPROCESS_ENABLED"] = "false"
+    
+    # Skip Cognee's internal LLM connection test (30s timeout) — we already
+    # verified the endpoint works and this avoids wasting a cold-start API call.
+    os.environ["COGNEE_SKIP_CONNECTION_TEST"] = "true"
     
     # Apply storage paths to Cognee configuration
     cognee.config.system_root_directory(system_path)
@@ -138,24 +249,48 @@ def initialize_cognee():
         os.environ["LLM_PROVIDER"] = "custom"
         os.environ["LLM_ENDPOINT"] = endpoint
         os.environ["LLM_API_KEY"] = groq_key
+        os.environ["DEVMIND_ROTATION_ACTIVE"] = "true"
         
         cognee.config.set_llm_provider("custom")
         cognee.config.set_llm_endpoint(endpoint)
         cognee.config.set_llm_api_key(groq_key)
         cognee.config.set_llm_model(model)
         if not groq_key:
-            print("[Error] No LLM API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY in your .env file.")
-            import sys
-            sys.exit(1)
+            logger.warning("[Warning] No Groq API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY to query or ingest.")
+    elif llm_provider == "gemini":
+        gemini_key = get_random_gemini_key()
+        os.environ["LLM_PROVIDER"] = "custom"
+        os.environ["LLM_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        os.environ["LLM_API_KEY"] = gemini_key
+        
+        cognee.config.set_llm_provider("custom")
+        cognee.config.set_llm_endpoint("https://generativelanguage.googleapis.com/v1beta/openai/")
+        cognee.config.set_llm_api_key(gemini_key)
+        model = os.getenv("LLM_MODEL", "gemini-2.5-flash-lite")
+        if not model.startswith("openai/"):
+            model = f"openai/{model}"
+        cognee.config.set_llm_model(model)
+        if not gemini_key:
+            logger.warning("[Warning] No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY to query or ingest.")
+        
+        # Install per-call key rotation if multiple keys are available
+        if len(_GEMINI_API_KEYS) > 1:
+            _install_litellm_key_rotation(_GEMINI_API_KEYS)
+        else:
+            logger.warning("Only 1 Gemini key found. Add more keys to GEMINI_API_KEYS for rate-limit resilience.")
     else:
-        openai_key = os.getenv("OPENAI_API_KEY", "")
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        endpoint = os.getenv("LLM_ENDPOINT")
+        model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+        
         cognee.config.set_llm_provider(llm_provider)
-        cognee.config.set_llm_model(os.getenv("LLM_MODEL", "openai/gpt-4o-mini"))
-        cognee.config.set_llm_api_key(openai_key)
-        if llm_provider == "openai" and not openai_key:
-            print("[Error] OPENAI_API_KEY is not set in your environment.")
-            import sys
-            sys.exit(1)
+        cognee.config.set_llm_model(model)
+        cognee.config.set_llm_api_key(api_key)
+        if endpoint:
+            cognee.config.set_llm_endpoint(endpoint)
+            
+        if llm_provider == "openai" and not api_key:
+            logger.warning("[Warning] OPENAI_API_KEY is not set. Please configure it to query or ingest.")
 
     # Configure embedding provider
     cognee.config.set_embedding_provider(embedding_provider)
@@ -163,26 +298,30 @@ def initialize_cognee():
     cognee.config.set_embedding_dimensions(int(os.getenv("EMBEDDING_DIMENSIONS", "384")))
     
     logger.info(f"Initializing DevMind memory layer...")
-    logger.info(f"LLM Provider: {llm_provider} (Mapped to custom OpenAI-compatible endpoint if groq)")
+    logger.info(f"LLM Provider: {llm_provider} (Mapped to custom base URL if not native)")
     logger.info(f"Embedding Provider: {embedding_provider} (Model: {os.getenv('EMBEDDING_MODEL')})")
     logger.info(f"System Storage Path: {system_path}")
     logger.info(f"Data Storage Path: {data_path}")
 
-async def remember_content(content: str, dataset_name: str) -> bool:
+async def remember_content(content: str | list[str], dataset_name: str) -> bool:
     """
-    Ingests text content into Cognee memory under a specified dataset name.
+    Ingests text content or a list of contents into Cognee memory under a specified dataset name.
     """
     try:
-        # Rotate API key if we are on custom/groq rotation
-        llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
-        if llm_provider == "groq" or os.environ.get("LLM_PROVIDER") == "custom":
+        # Per-call key rotation is now handled by the litellm monkey-patch
+        # (see _install_litellm_key_rotation). For Groq (non-Gemini), we still
+        # rotate at the per-file level as a fallback.
+        if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
-            if groq_key:
-                os.environ["LLM_API_KEY"] = groq_key
-                os.environ["LLM_ENDPOINT"] = endpoint
-                cognee.config.set_llm_endpoint(endpoint)
-                cognee.config.set_llm_api_key(groq_key)
-                cognee.config.set_llm_model(model)
+            if not groq_key:
+                logger.error("No API keys available. Aborting memory ingestion.")
+                return False
+            
+            os.environ["LLM_API_KEY"] = groq_key
+            os.environ["LLM_ENDPOINT"] = endpoint
+            cognee.config.set_llm_endpoint(endpoint)
+            cognee.config.set_llm_api_key(groq_key)
+            cognee.config.set_llm_model(model)
 
         logger.info(f"Remembering content in dataset '{dataset_name}'...")
         await cognee.remember(content, dataset_name=dataset_name)
@@ -216,20 +355,28 @@ async def recall_query(query: str) -> str:
     """
     try:
         # Rotate API key if we are on custom/groq rotation
-        llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
-        if llm_provider == "groq" or os.environ.get("LLM_PROVIDER") == "custom":
+        if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
-            if groq_key:
-                os.environ["LLM_API_KEY"] = groq_key
-                os.environ["LLM_ENDPOINT"] = endpoint
-                cognee.config.set_llm_endpoint(endpoint)
-                cognee.config.set_llm_api_key(groq_key)
-                cognee.config.set_llm_model(model)
+            if not groq_key:
+                return "Error: No API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY before querying."
+            
+            os.environ["LLM_API_KEY"] = groq_key
+            os.environ["LLM_ENDPOINT"] = endpoint
+            cognee.config.set_llm_endpoint(endpoint)
+            cognee.config.set_llm_api_key(groq_key)
+            cognee.config.set_llm_model(model)
+        elif os.getenv("DEVMIND_GEMINI_ROTATION_ACTIVE") == "true":
+            gemini_key = get_random_gemini_key()
+            if not gemini_key:
+                return "Error: No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY before querying."
+            os.environ["LLM_API_KEY"] = gemini_key
+            os.environ["CUSTOM_API_KEY"] = gemini_key
+            cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Recalling memory for query: '{query}'...")
         
         # Target only the active project directory's unified dataset
-        current_dir = os.getcwd()
+        current_dir = get_project_root()
         folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
         target_dataset = f"devmind_{folder_name}"
         

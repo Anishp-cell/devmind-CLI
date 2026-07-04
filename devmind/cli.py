@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes
+from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes, get_project_root
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history
 from devmind.ingestion.comment_extractor import get_codebase_comments
@@ -72,19 +72,21 @@ async def remember_pipeline(directory: str):
         
     typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name})...")
     
-    # Ingest file contents
-    file_success = 0
+    # Ingest file contents in a single batch
+    contents = []
     for idx, file_data in enumerate(files, start=1):
         rel_path = file_data["relative_path"]
         content = file_data["content"]
         
         tagged_content = f"File Path: {rel_path}\n---\n{content}"
-        logger.info(f"[{idx}/{len(files)}] Processing {rel_path}...")
-        success = await remember_content(tagged_content, dataset_name=dataset_name)
-        if success:
-            file_success += 1
-            
-    typer.echo(f"Successfully remembered {file_success}/{len(files)} files.")
+        contents.append(tagged_content)
+        
+    logger.info(f"Batched {len(contents)} files. Triggering ingestion pipeline...")
+    success = await remember_content(contents, dataset_name=dataset_name)
+    if success:
+        typer.echo(f"Successfully remembered {len(files)} files.")
+    else:
+        typer.echo(f"[Warning] Failed to ingest files.")
 
     # 2. Extract and Ingest Git History
     git_logs = get_git_history(directory, max_commits=20)
@@ -121,7 +123,8 @@ def remember(
     Ingest the codebase files into persistent Cognee memory.
     """
     initialize_cognee()
-    run_async(remember_pipeline(directory))
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+    run_async(remember_pipeline(resolved_dir))
     typer.echo("[Success] Codebase memory ingestion completed.")
 
 @app.command()
@@ -207,12 +210,16 @@ def refresh(
     Refresh codebase memory by scanning for changed files and refining relationships.
     """
     initialize_cognee()
-    typer.echo("Scanning for codebase changes to refresh memory...")
-    run_async(remember_pipeline(directory))
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+    folder_name = os.path.basename(os.path.abspath(resolved_dir)).lower().replace("-", "_").replace(" ", "_")
+    dataset_name = f"devmind_{folder_name}"
+    
+    typer.echo(f"Scanning for codebase changes to refresh memory (Dataset: {dataset_name})...")
+    run_async(remember_pipeline(resolved_dir))
     
     typer.echo("Refining the codebase memory graph structure...")
-    # Improve memory on all dataset partitions
-    success = run_async(improve_memory(dataset_name="codebase_memory"))
+    # Improve memory on the specific folder-based dataset
+    success = run_async(improve_memory(dataset_name=dataset_name))
     if success:
         typer.echo("[Success] Memory refresh and relationship refinement completed.")
     else:
@@ -262,13 +269,16 @@ def forget(
 
 @app.command()
 def dashboard(
-    port: int = typer.Option(8000, "--port", "-p", help="Port to run the dashboard server on.")
+    port: int = typer.Option(8000, "--port", "-p", help="Port to run the dashboard server on."),
+    directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to target.")
 ):
     """
     Launch the DevMind Web UI dashboard.
     """
     import uvicorn
-    typer.echo(f"Starting DevMind Web UI Dashboard on http://localhost:{port} ...")
+    abs_dir = os.path.abspath(directory)
+    os.chdir(abs_dir)
+    typer.echo(f"Starting DevMind Web UI Dashboard on http://localhost:{port} targeting '{abs_dir}' ...")
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
 
 @app.command()
