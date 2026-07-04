@@ -35,6 +35,21 @@ import cognee
 # Global list of keys for rotation
 _GROQ_API_KEYS = []
 
+def get_project_root(start_dir: str = None) -> str:
+    """
+    Finds the nearest parent directory that contains a project marker (.git, .env, pyproject.toml, or setup.py).
+    Falls back to start_dir if none found.
+    """
+    curr = os.path.abspath(start_dir or os.getcwd())
+    while True:
+        if any(os.path.exists(os.path.join(curr, marker)) for marker in (".git", ".env", "pyproject.toml", "setup.py")):
+            return curr
+        parent = os.path.dirname(curr)
+        if parent == curr:
+            break
+        curr = parent
+    return os.path.abspath(start_dir or os.getcwd())
+
 def _get_global_config_path() -> pathlib.Path:
     """
     Returns the platform-appropriate path for the global DevMind config file.
@@ -69,13 +84,19 @@ def load_api_keys():
         if single_key:
             _GROQ_API_KEYS.append(single_key)
 
-    # 3. Try global config file if still empty
-    if not _GROQ_API_KEYS:
-        config_path = _get_global_config_path()
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = json.load(f)
+    # 3. Load global config file to inject configurations and fallback keys
+    config_path = _get_global_config_path()
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            
+            # Cascading global configurations into os.environ
+            for key, val in config.items():
+                if key not in os.environ and val is not None:
+                    os.environ[key] = str(val)
+                    
+            if not _GROQ_API_KEYS:
                 global_keys_str = config.get("GROQ_API_KEYS", "")
                 if global_keys_str:
                     _GROQ_API_KEYS = [k.strip() for k in global_keys_str.split(",") if k.strip()]
@@ -83,10 +104,9 @@ def load_api_keys():
                     single = config.get("GROQ_API_KEY", "")
                     if single:
                         _GROQ_API_KEYS.append(single)
-                if _GROQ_API_KEYS:
-                    logger.info(f"Loaded API keys from global config: {config_path}")
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Could not read global config at {config_path}: {e}")
+            logger.info(f"Loaded configurations and fallback keys from global config: {config_path}")
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Could not read global config at {config_path}: {e}")
 
 def get_random_api_key() -> tuple[str, str, str]:
     """
@@ -144,18 +164,14 @@ def initialize_cognee():
         cognee.config.set_llm_api_key(groq_key)
         cognee.config.set_llm_model(model)
         if not groq_key:
-            print("[Error] No LLM API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY in your .env file.")
-            import sys
-            sys.exit(1)
+            logger.warning("[Warning] No Groq API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY to query or ingest.")
     else:
         openai_key = os.getenv("OPENAI_API_KEY", "")
         cognee.config.set_llm_provider(llm_provider)
         cognee.config.set_llm_model(os.getenv("LLM_MODEL", "openai/gpt-4o-mini"))
         cognee.config.set_llm_api_key(openai_key)
         if llm_provider == "openai" and not openai_key:
-            print("[Error] OPENAI_API_KEY is not set in your environment.")
-            import sys
-            sys.exit(1)
+            logger.warning("[Warning] OPENAI_API_KEY is not set. Please configure it to query or ingest.")
 
     # Configure embedding provider
     cognee.config.set_embedding_provider(embedding_provider)
@@ -177,12 +193,15 @@ async def remember_content(content: str, dataset_name: str) -> bool:
         llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
         if llm_provider == "groq" or os.environ.get("LLM_PROVIDER") == "custom":
             groq_key, endpoint, model = get_random_api_key()
-            if groq_key:
-                os.environ["LLM_API_KEY"] = groq_key
-                os.environ["LLM_ENDPOINT"] = endpoint
-                cognee.config.set_llm_endpoint(endpoint)
-                cognee.config.set_llm_api_key(groq_key)
-                cognee.config.set_llm_model(model)
+            if not groq_key:
+                logger.error("No API keys available. Aborting memory ingestion.")
+                return False
+            
+            os.environ["LLM_API_KEY"] = groq_key
+            os.environ["LLM_ENDPOINT"] = endpoint
+            cognee.config.set_llm_endpoint(endpoint)
+            cognee.config.set_llm_api_key(groq_key)
+            cognee.config.set_llm_model(model)
 
         logger.info(f"Remembering content in dataset '{dataset_name}'...")
         await cognee.remember(content, dataset_name=dataset_name)
@@ -219,17 +238,19 @@ async def recall_query(query: str) -> str:
         llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
         if llm_provider == "groq" or os.environ.get("LLM_PROVIDER") == "custom":
             groq_key, endpoint, model = get_random_api_key()
-            if groq_key:
-                os.environ["LLM_API_KEY"] = groq_key
-                os.environ["LLM_ENDPOINT"] = endpoint
-                cognee.config.set_llm_endpoint(endpoint)
-                cognee.config.set_llm_api_key(groq_key)
-                cognee.config.set_llm_model(model)
+            if not groq_key:
+                return "Error: No API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY before querying."
+            
+            os.environ["LLM_API_KEY"] = groq_key
+            os.environ["LLM_ENDPOINT"] = endpoint
+            cognee.config.set_llm_endpoint(endpoint)
+            cognee.config.set_llm_api_key(groq_key)
+            cognee.config.set_llm_model(model)
 
         logger.info(f"Recalling memory for query: '{query}'...")
         
         # Target only the active project directory's unified dataset
-        current_dir = os.getcwd()
+        current_dir = get_project_root()
         folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
         target_dataset = f"devmind_{folder_name}"
         

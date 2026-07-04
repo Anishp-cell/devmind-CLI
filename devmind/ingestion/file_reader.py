@@ -117,6 +117,18 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
     for dirpath, dirnames, filenames in os.walk(root_path):
         # Modify dirnames in place to skip hardcoded ignored directories
         dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        
+        # Also prune directories that match .gitignore rules to prevent entering large build/data dirs
+        if gitignore_spec:
+            pruned_dirs = []
+            for d in dirnames:
+                dir_rel_path = (pathlib.Path(dirpath) / d).relative_to(root_path)
+                # Directory matching in pathspec is done by adding a trailing slash
+                if gitignore_spec.match_file(dir_rel_path.as_posix() + "/"):
+                    logger.debug(f"Pruning gitignored directory from scan: {dir_rel_path}")
+                else:
+                    pruned_dirs.append(d)
+            dirnames[:] = pruned_dirs
 
         for filename in filenames:
             file_path = pathlib.Path(dirpath) / filename
