@@ -173,6 +173,10 @@ def initialize_cognee():
     # Disable backend access control and authentication for local CLI use
     os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
     
+    # Disable database subprocesses to prevent multiprocessing deadlocks and hangs on Windows
+    cognee.config.set_graph_database_subprocess_enabled(False)
+    cognee.config.set_vector_db_subprocess_enabled(False)
+    
     # Apply storage paths to Cognee configuration
     cognee.config.system_root_directory(system_path)
     cognee.config.data_root_directory(data_path)
