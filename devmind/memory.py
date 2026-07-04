@@ -158,6 +158,7 @@ def initialize_cognee():
         os.environ["LLM_PROVIDER"] = "custom"
         os.environ["LLM_ENDPOINT"] = endpoint
         os.environ["LLM_API_KEY"] = groq_key
+        os.environ["DEVMIND_ROTATION_ACTIVE"] = "true"
         
         cognee.config.set_llm_provider("custom")
         cognee.config.set_llm_endpoint(endpoint)
@@ -166,11 +167,17 @@ def initialize_cognee():
         if not groq_key:
             logger.warning("[Warning] No Groq API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY to query or ingest.")
     else:
-        openai_key = os.getenv("OPENAI_API_KEY", "")
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+        endpoint = os.getenv("LLM_ENDPOINT")
+        model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+        
         cognee.config.set_llm_provider(llm_provider)
-        cognee.config.set_llm_model(os.getenv("LLM_MODEL", "openai/gpt-4o-mini"))
-        cognee.config.set_llm_api_key(openai_key)
-        if llm_provider == "openai" and not openai_key:
+        cognee.config.set_llm_model(model)
+        cognee.config.set_llm_api_key(api_key)
+        if endpoint:
+            cognee.config.set_llm_endpoint(endpoint)
+            
+        if llm_provider == "openai" and not api_key:
             logger.warning("[Warning] OPENAI_API_KEY is not set. Please configure it to query or ingest.")
 
     # Configure embedding provider
@@ -179,7 +186,7 @@ def initialize_cognee():
     cognee.config.set_embedding_dimensions(int(os.getenv("EMBEDDING_DIMENSIONS", "384")))
     
     logger.info(f"Initializing DevMind memory layer...")
-    logger.info(f"LLM Provider: {llm_provider} (Mapped to custom OpenAI-compatible endpoint if groq)")
+    logger.info(f"LLM Provider: {llm_provider} (Mapped to custom base URL if not native)")
     logger.info(f"Embedding Provider: {embedding_provider} (Model: {os.getenv('EMBEDDING_MODEL')})")
     logger.info(f"System Storage Path: {system_path}")
     logger.info(f"Data Storage Path: {data_path}")
@@ -190,8 +197,7 @@ async def remember_content(content: str, dataset_name: str) -> bool:
     """
     try:
         # Rotate API key if we are on custom/groq rotation
-        llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
-        if llm_provider == "groq" or os.environ.get("LLM_PROVIDER") == "custom":
+        if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
             if not groq_key:
                 logger.error("No API keys available. Aborting memory ingestion.")
@@ -235,8 +241,7 @@ async def recall_query(query: str) -> str:
     """
     try:
         # Rotate API key if we are on custom/groq rotation
-        llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
-        if llm_provider == "groq" or os.environ.get("LLM_PROVIDER") == "custom":
+        if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
             if not groq_key:
                 return "Error: No API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY before querying."
