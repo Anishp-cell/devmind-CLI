@@ -4,6 +4,8 @@ import json
 import logging
 import random
 import asyncio
+import itertools
+import time
 import pathlib
 from dotenv import load_dotenv, find_dotenv
 
@@ -35,6 +37,55 @@ import cognee
 # Global list of keys for rotation
 _GROQ_API_KEYS = []
 _GEMINI_API_KEYS = []
+
+# ─── Per-call litellm monkey-patch for API key rotation ──────────────────
+# Cognee's GenericAPIAdapter stores api_key at construction time and passes
+# the SAME key to every litellm.acompletion() call.  With free-tier Gemini
+# (20 RPD per project), we burn through the quota in seconds because Cognee
+# fires many parallel LLM calls per single remember() invocation.
+#
+# Solution: monkey-patch litellm.acompletion so that EVERY call gets a fresh
+# key from a round-robin cycle across all 7 project keys.
+_litellm_original_acompletion = None
+_key_cycle = None
+_last_call_time = 0.0
+_MIN_CALL_INTERVAL = 4.5  # seconds between calls (≈13 RPM, well under free-tier limits)
+
+def _install_litellm_key_rotation(keys: list):
+    """Monkey-patch litellm.acompletion to rotate API keys on every call."""
+    import litellm
+    global _litellm_original_acompletion, _key_cycle
+    
+    if _litellm_original_acompletion is not None:
+        return  # Already patched
+    
+    _litellm_original_acompletion = litellm.acompletion
+    _key_cycle = itertools.cycle(keys)
+    
+    async def _rotating_acompletion(*args, **kwargs):
+        global _last_call_time
+        
+        # Rate-limit: enforce minimum interval between calls
+        now = time.monotonic()
+        elapsed = now - _last_call_time
+        if elapsed < _MIN_CALL_INTERVAL:
+            await asyncio.sleep(_MIN_CALL_INTERVAL - elapsed)
+        _last_call_time = time.monotonic()
+        
+        # Rotate to next API key
+        next_key = next(_key_cycle)
+        kwargs['api_key'] = next_key
+        
+        if len(next_key) > 10:
+            masked = f"{next_key[:6]}...{next_key[-4:]}"
+        else:
+            masked = "***"
+        logger.debug(f"litellm call → rotated key {masked}")
+        
+        return await _litellm_original_acompletion(*args, **kwargs)
+    
+    litellm.acompletion = _rotating_acompletion
+    logger.info(f"Installed litellm key rotation with {len(keys)} keys (interval: {_MIN_CALL_INTERVAL}s)")
 
 def get_project_root(start_dir: str = None) -> str:
     """
@@ -211,17 +262,22 @@ def initialize_cognee():
         os.environ["LLM_PROVIDER"] = "custom"
         os.environ["LLM_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
         os.environ["LLM_API_KEY"] = gemini_key
-        os.environ["DEVMIND_GEMINI_ROTATION_ACTIVE"] = "true"
         
         cognee.config.set_llm_provider("custom")
         cognee.config.set_llm_endpoint("https://generativelanguage.googleapis.com/v1beta/openai/")
         cognee.config.set_llm_api_key(gemini_key)
-        model = os.getenv("LLM_MODEL", "gemini-2.0-flash")
+        model = os.getenv("LLM_MODEL", "gemini-2.5-flash")
         if not model.startswith("openai/"):
             model = f"openai/{model}"
         cognee.config.set_llm_model(model)
         if not gemini_key:
             logger.warning("[Warning] No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY to query or ingest.")
+        
+        # Install per-call key rotation if multiple keys are available
+        if len(_GEMINI_API_KEYS) > 1:
+            _install_litellm_key_rotation(_GEMINI_API_KEYS)
+        else:
+            logger.warning("Only 1 Gemini key found. Add more keys to GEMINI_API_KEYS for rate-limit resilience.")
     else:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         endpoint = os.getenv("LLM_ENDPOINT")
@@ -252,7 +308,9 @@ async def remember_content(content: str, dataset_name: str) -> bool:
     Ingests text content into Cognee memory under a specified dataset name.
     """
     try:
-        # Rotate API key if we are on custom/groq rotation
+        # Per-call key rotation is now handled by the litellm monkey-patch
+        # (see _install_litellm_key_rotation). For Groq (non-Gemini), we still
+        # rotate at the per-file level as a fallback.
         if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
             if not groq_key:
@@ -264,14 +322,6 @@ async def remember_content(content: str, dataset_name: str) -> bool:
             cognee.config.set_llm_endpoint(endpoint)
             cognee.config.set_llm_api_key(groq_key)
             cognee.config.set_llm_model(model)
-        elif os.getenv("DEVMIND_GEMINI_ROTATION_ACTIVE") == "true":
-            gemini_key = get_random_gemini_key()
-            if not gemini_key:
-                logger.error("No Gemini API keys available. Aborting memory ingestion.")
-                return False
-            os.environ["LLM_API_KEY"] = gemini_key
-            os.environ["CUSTOM_API_KEY"] = gemini_key
-            cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Remembering content in dataset '{dataset_name}'...")
         await cognee.remember(content, dataset_name=dataset_name)
