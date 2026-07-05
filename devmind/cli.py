@@ -286,7 +286,8 @@ def mcp():
     """
     Start the DevMind MCP server for integration with Claude Code.
     """
-    typer.echo("Starting DevMind MCP Server...")
+    typer.echo("Starting DevMind MCP Server...", err=True)
+    initialize_cognee()
     from devmind.integrations.claude_code import mcp as mcp_instance
     mcp_instance.run()
 

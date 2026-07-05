@@ -29,8 +29,14 @@ os.environ["SYSTEM_ROOT_DIRECTORY"] = system_path
 os.environ["DATA_ROOT_DIRECTORY"] = data_path
 os.environ["CACHE_ROOT_DIRECTORY"] = os.path.join(project_root, ".cognee_cache")
 os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
-os.environ["LOG_LEVEL"] = "WARNING"
+os.environ["LOG_LEVEL"] = "ERROR"
 os.environ["LITELLM_SUPPRESS_PROVIDER_INFO"] = "True"
+
+import logging
+import warnings
+# Silence all warnings globally before Cognee imports or sets up its loggers
+warnings.filterwarnings("ignore")
+logging.getLogger("cognee").setLevel(logging.ERROR)
 
 import cognee
 
@@ -50,27 +56,36 @@ _litellm_original_acompletion = None
 _key_cycle = None
 _last_call_time = 0.0
 _MIN_CALL_INTERVAL = 4.5  # seconds between calls (≈13 RPM, well under free-tier limits)
+_rate_limit_lock = None
 
 def _install_litellm_key_rotation(keys: list):
     """Monkey-patch litellm.acompletion to rotate API keys on every call."""
     import litellm
-    global _litellm_original_acompletion, _key_cycle
+    global _litellm_original_acompletion, _key_cycle, _rate_limit_lock
     
     if _litellm_original_acompletion is not None:
         return  # Already patched
     
     _litellm_original_acompletion = litellm.acompletion
     _key_cycle = itertools.cycle(keys)
+    _rate_limit_lock = asyncio.Lock()
     
     async def _rotating_acompletion(*args, **kwargs):
         global _last_call_time
         
-        # Rate-limit: enforce minimum interval between calls
-        now = time.monotonic()
-        elapsed = now - _last_call_time
-        if elapsed < _MIN_CALL_INTERVAL:
-            await asyncio.sleep(_MIN_CALL_INTERVAL - elapsed)
-        _last_call_time = time.monotonic()
+        # Rate-limit: serialize and enforce minimum interval between calls
+        async with _rate_limit_lock:
+            now = time.monotonic()
+            if now < _last_call_time:
+                scheduled_time = _last_call_time + _MIN_CALL_INTERVAL
+                sleep_time = scheduled_time - now
+                _last_call_time = scheduled_time
+            else:
+                sleep_time = 0.0
+                _last_call_time = now + _MIN_CALL_INTERVAL
+                
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
         
         # Rotate to next API key
         next_key = next(_key_cycle)
@@ -218,6 +233,15 @@ def initialize_cognee():
     """
     Loads configuration from .env and verifies LLM & Embedding provider setup.
     """
+    import warnings
+    import logging
+    # Suppress all python warnings globally (ResourceWarning, RuntimeWarning, DeprecationWarning)
+    warnings.filterwarnings("ignore")
+    warnings.filterwarnings("ignore", module="aiohttp")
+    # Suppress verbose warning/info logs from Cognee and aiohttp internal processes
+    logging.getLogger("cognee").setLevel(logging.ERROR)
+    logging.getLogger("aiohttp").setLevel(logging.ERROR)
+
     load_dotenv(find_dotenv(usecwd=True))
     load_api_keys()
     
@@ -262,6 +286,8 @@ def initialize_cognee():
         os.environ["LLM_PROVIDER"] = "custom"
         os.environ["LLM_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
         os.environ["LLM_API_KEY"] = gemini_key
+        # Force litellm to use standard OpenAI provider for Gemini model to bypass vertex_ai routing for GCP keys starting with AQ.
+        os.environ["LLM_ARGS"] = '{"custom_llm_provider": "openai"}'
         
         cognee.config.set_llm_provider("custom")
         cognee.config.set_llm_endpoint("https://generativelanguage.googleapis.com/v1beta/openai/")

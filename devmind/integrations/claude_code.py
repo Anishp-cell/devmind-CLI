@@ -4,11 +4,7 @@ import asyncio
 from fastmcp import FastMCP
 from devmind.memory import recall_query, remember_content
 
-# Initialize FastMCP Server
-mcp = FastMCP(
-    "DevMind",
-    dependencies=["cognee", "fastmcp"]
-)
+mcp = FastMCP("DevMind")
 
 @mcp.tool()
 async def query_codebase_memory(query: str) -> str:
