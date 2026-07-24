@@ -306,5 +306,80 @@ def mcp():
     from devmind.integrations.claude_code import mcp as mcp_instance
     mcp_instance.run()
 
+@app.command()
+def graph(
+    port: int = typer.Option(8000, "--port", "-p", help="Port to run the visual graph dashboard on."),
+    directory: str = typer.Option(".", "--dir", "-d", help="The codebase directory to map.")
+):
+    """
+    Launch interactive visual architecture graph in your browser.
+    """
+    import uvicorn
+    import webbrowser
+    abs_dir = os.path.abspath(directory)
+    os.chdir(abs_dir)
+    url = f"http://localhost:{port}/#graph"
+    typer.echo(f"Opening interactive codebase graph at {url} ...")
+    webbrowser.open(url)
+    uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
+
+@app.command()
+def digest(
+    output: str = typer.Option("DEV_MINDMAP.md", "--output", "-o", help="Output file name for the architecture digest."),
+    directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to analyze.")
+):
+    """
+    Generate an instant Markdown architecture mindmap digest of the codebase.
+    """
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+    from devmind.web.app import build_codebase_graph_data
+    graph_data = build_codebase_graph_data(resolved_dir)
+    stats = graph_data["stats"]
+    
+    lines = [
+        f"# DevMind Codebase Architecture Digest: {os.path.basename(resolved_dir)}",
+        "",
+        "## High-Level Architecture Metrics",
+        f"- **Indexable Files**: {stats['total_files']}",
+        f"- **Classes / Data Models**: {stats['total_classes']}",
+        f"- **Functions / Methods**: {stats['total_funcs']}",
+        f"- **Graph Nodes**: {stats['total_nodes']}",
+        f"- **Graph Relationships**: {stats['total_edges']}",
+        "",
+        "## Codebase Symbol Map",
+        ""
+    ]
+    
+    nodes_by_file = {}
+    for node in graph_data["nodes"]:
+        if node["group"] == "file":
+            nodes_by_file[node["path"]] = []
+            
+    for node in graph_data["nodes"]:
+        if node["group"] != "file":
+            parts = node["id"].split(":", 2)
+            if len(parts) >= 2:
+                rel_p = parts[1]
+                if rel_p in nodes_by_file:
+                    nodes_by_file[rel_p].append(node["label"])
+                    
+    for file_path, syms in sorted(nodes_by_file.items()):
+        lines.append(f"### 📄 `{file_path}`")
+        if syms:
+            for s in syms:
+                lines.append(f"  - {s}")
+        else:
+            lines.append("  - *(No top-level classes/functions extracted)*")
+        lines.append("")
+        
+    lines.append("---")
+    lines.append("*Generated automatically by DevMind CLI (`devmind digest`)*")
+    
+    out_path = os.path.join(resolved_dir, output)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+        
+    typer.echo(f"[Success] Architecture digest generated at '{out_path}'.")
+
 if __name__ == "__main__":
     app()
