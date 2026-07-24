@@ -304,6 +304,23 @@ def initialize_cognee():
             _install_litellm_key_rotation(_GEMINI_API_KEYS)
         else:
             logger.warning("Only 1 Gemini key found. Add more keys to GEMINI_API_KEYS for rate-limit resilience.")
+    elif llm_provider == "ollama":
+        ollama_endpoint = os.getenv("OLLAMA_ENDPOINT") or os.getenv("OLLAMA_HOST", "http://localhost:11434/v1")
+        if not ollama_endpoint.endswith("/v1") and not ollama_endpoint.endswith("/v1/"):
+            ollama_endpoint = f"{ollama_endpoint.rstrip('/')}/v1"
+        model = os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL", "openai/llama3.2")
+        if not model.startswith("openai/"):
+            model = f"openai/{model}"
+            
+        os.environ["LLM_PROVIDER"] = "custom"
+        os.environ["LLM_ENDPOINT"] = ollama_endpoint
+        os.environ["LLM_API_KEY"] = "ollama"
+        
+        cognee.config.set_llm_provider("custom")
+        cognee.config.set_llm_endpoint(ollama_endpoint)
+        cognee.config.set_llm_api_key("ollama")
+        cognee.config.set_llm_model(model)
+        logger.info(f"Ollama local LLM configured at {ollama_endpoint} (model: {model})")
     else:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
         endpoint = os.getenv("LLM_ENDPOINT")
