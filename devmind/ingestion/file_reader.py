@@ -8,6 +8,8 @@ try:
 except ImportError:
     pathspec = None
 
+from devmind.ingestion.ast_parser import extract_code_symbols, build_ast_summary
+
 logger = logging.getLogger("devmind.ingestion.file_reader")
 
 # Common directories to skip during scanning
@@ -155,10 +157,16 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
 
                     content = scrub_secrets(content)
 
+                    rel_path_str = str(relative_path)
+                    ast_syms = extract_code_symbols(content, rel_path_str)
+                    ast_summ = build_ast_summary(ast_syms, rel_path_str)
+
                     codebase_files.append({
-                        "relative_path": str(relative_path),
+                        "relative_path": rel_path_str,
                         "absolute_path": str(file_path),
-                        "content": content
+                        "content": content,
+                        "ast_symbols": ast_syms,
+                        "ast_summary": ast_summ
                     })
                 except Exception as e:
                     logger.warning(f"Skipping file {relative_path} due to read error: {e}")
