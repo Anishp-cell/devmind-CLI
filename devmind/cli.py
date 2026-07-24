@@ -150,13 +150,20 @@ def ask(
     Ask a question about the ingested codebase memory in plain English.
     """
     initialize_cognee()
-    
-    typer.echo(f"Querying codebase memory for: '{query}'...")
-    answer = run_async(recall_query(query))
-    
-    typer.echo("\n--- Response ---")
-    typer.echo(answer)
-    typer.echo("----------------")
+    from rich.console import Console
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    console = Console()
+    with console.status(f"[bold cyan]Searching codebase memory for '[white]{query}[/white]'...[/bold cyan]", spinner="dots"):
+        answer = run_async(recall_query(query))
+        
+    console.print(Panel(
+        Markdown(answer),
+        title="[bold magenta]DevMind Memory Response[/bold magenta]",
+        border_style="indigo",
+        padding=(1, 2)
+    ))
 
 @app.command()
 def chat():
