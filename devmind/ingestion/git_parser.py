@@ -70,3 +70,58 @@ def get_git_history(repo_path: str, max_commits: int = 50) -> list[str]:
     except Exception as e:
         logger.error(f"Error parsing git history: {e}", exc_info=True)
         return history_logs
+
+
+def get_changed_files_git_diff(repo_path: str) -> set[str]:
+    """
+    Returns a set of relative file paths that have been modified, staged, or changed
+    in the uncommitted workspace or last git commit.
+    Used for instant incremental re-indexing.
+    """
+    changed_files = set()
+    try:
+        git_dir = os.path.join(repo_path, ".git")
+        if not os.path.exists(git_dir):
+            return changed_files
+
+        repo = Repo(repo_path)
+        if repo.bare:
+            return changed_files
+
+        # 1. Unstaged changes (working tree vs index)
+        for item in repo.index.diff(None):
+            p = item.b_path or item.a_path
+            if p:
+                changed_files.add(p.replace("\\", "/"))
+
+        # 2. Staged changes (index vs HEAD)
+        try:
+            for item in repo.index.diff('HEAD'):
+                p = item.b_path or item.a_path
+                if p:
+                    changed_files.add(p.replace("\\", "/"))
+        except Exception:
+            pass
+
+        # 3. Untracked files
+        for p in repo.untracked_files:
+            if p:
+                changed_files.add(p.replace("\\", "/"))
+
+        # 4. If no workspace changes found, include files changed in last commit
+        if not changed_files and len(repo.heads) > 0:
+            try:
+                commit = repo.head.commit
+                if commit.parents:
+                    for item in commit.parents[0].diff(commit):
+                        p = item.b_path or item.a_path
+                        if p:
+                            changed_files.add(p.replace("\\", "/"))
+            except Exception:
+                pass
+
+    except Exception as e:
+        logger.warning(f"Git diff detection failed: {e}")
+
+    return changed_files
+

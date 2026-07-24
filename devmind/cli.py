@@ -16,7 +16,7 @@ if sys.platform == 'win32':
 
 from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes, get_project_root
 from devmind.ingestion.file_reader import scan_codebase_files
-from devmind.ingestion.git_parser import get_git_history
+from devmind.ingestion.git_parser import get_git_history, get_changed_files_git_diff
 from devmind.ingestion.comment_extractor import get_codebase_comments
 
 # Setup logging
@@ -55,7 +55,7 @@ app = typer.Typer(
     add_completion=False
 )
 
-async def remember_pipeline(directory: str):
+async def remember_pipeline(directory: str, incremental: bool = False):
     """
     Core async pipeline for scanning files, comments, and git logs,
     and loading them into Cognee.
@@ -69,7 +69,16 @@ async def remember_pipeline(directory: str):
     if not files:
         typer.echo("No files found to ingest.")
         return
-        
+
+    if incremental:
+        changed_paths = get_changed_files_git_diff(directory)
+        if changed_paths:
+            files = [f for f in files if f["relative_path"].replace("\\", "/") in changed_paths]
+            typer.echo(f"Incremental mode: Filtered to {len(files)} changed file(s).")
+        else:
+            typer.echo("Incremental mode: No changed files detected via git diff.")
+            return
+
     typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name})...")
     
     # Ingest file contents in a single batch
@@ -77,8 +86,9 @@ async def remember_pipeline(directory: str):
     for idx, file_data in enumerate(files, start=1):
         rel_path = file_data["relative_path"]
         content = file_data["content"]
+        ast_summary = file_data.get("ast_summary", "")
         
-        tagged_content = f"File Path: {rel_path}\n---\n{content}"
+        tagged_content = f"File Path: {rel_path}\n{ast_summary}\n---\n{content}"
         contents.append(tagged_content)
         
     logger.info(f"Batched {len(contents)} files. Triggering ingestion pipeline...")
@@ -117,6 +127,11 @@ def remember(
         ".", 
         "--dir", "-d", 
         help="The directory of the codebase to ingest."
+    ),
+    incremental: bool = typer.Option(
+        False,
+        "--incremental", "-i",
+        help="Only scan and ingest files modified or changed in git diff."
     )
 ):
     """
@@ -124,7 +139,7 @@ def remember(
     """
     initialize_cognee()
     resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
-    run_async(remember_pipeline(resolved_dir))
+    run_async(remember_pipeline(resolved_dir, incremental=incremental))
     typer.echo("[Success] Codebase memory ingestion completed.")
 
 @app.command()
