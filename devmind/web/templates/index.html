@@ -3,11 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DevMind – Codebase Memory Dashboard</title>
+    <title>DevMind – Codebase Memory & Architecture Dashboard</title>
     <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vis.js Network CDN for Codebase Architecture Graph -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -45,6 +47,12 @@
             backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
+        /* Vis network styling */
+        #vis-graph-container {
+            width: 100%;
+            height: 100%;
+            background: #09090b;
+        }
         /* Custom scrollbar */
         ::-webkit-scrollbar {
             width: 6px;
@@ -75,9 +83,20 @@
                 <h1 class="font-display font-bold text-xl tracking-tight bg-gradient-to-r from-white via-indigo-200 to-brand-500 bg-clip-text text-transparent">
                     DevMind
                 </h1>
-                <p class="text-xs text-zinc-400">Codebase Memory Layer</p>
+                <p class="text-xs text-zinc-400">Codebase Memory & Visual Architecture</p>
             </div>
         </div>
+
+        <!-- View Switcher Tabs -->
+        <div class="flex items-center gap-2 bg-zinc-900/80 p-1.5 rounded-xl border border-zinc-800">
+            <button id="tab-chat-btn" onclick="switchTab('chat')" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white shadow-md transition-all">
+                💬 Memory Chat
+            </button>
+            <button id="tab-graph-btn" onclick="switchTab('graph')" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-white transition-all">
+                🕸️ Interactive Architecture Graph
+            </button>
+        </div>
+
         <div class="flex items-center gap-4">
             <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                 <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -101,7 +120,7 @@
                     Memory Ingestion
                 </h2>
                 <p class="text-xs text-zinc-400 leading-relaxed">
-                    Trigger background codebase sync. Scans files, comments, and git commit history to update the graph.
+                    Trigger background codebase sync. Runs zero-token AST symbol indexing & git log graph extraction.
                 </p>
                 <button onclick="triggerRemember()" id="ingest-btn" class="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 font-semibold text-sm transition-all duration-300 shadow-lg shadow-brand-600/10 hover:shadow-brand-600/30 flex items-center justify-center gap-2">
                     <span>Remember Codebase</span>
@@ -109,8 +128,8 @@
                 <div id="ingest-status" class="hidden text-xs text-zinc-400 border-t border-zinc-800 pt-3 mt-1"></div>
             </div>
 
-            <!-- ADR Logger Card -->
-            <div class="glass p-6 rounded-2xl flex flex-col gap-4 shadow-xl flex-1">
+            <!-- Graph Info / ADR Logger Card -->
+            <div id="left-adr-card" class="glass p-6 rounded-2xl flex flex-col gap-4 shadow-xl flex-1">
                 <h2 class="font-display font-semibold text-lg text-white flex items-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -130,39 +149,69 @@
 
         </div>
 
-        <!-- Right Side: Chat box (8 cols) -->
+        <!-- Right Side: Main Interactive View (8 cols) -->
         <div class="lg:col-span-8 glass rounded-2xl flex flex-col overflow-hidden shadow-xl h-[calc(100vh-140px)]">
-            <!-- Chat Header -->
-            <div class="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/40">
-                <div class="flex items-center gap-2">
-                    <span class="h-2 w-2 rounded-full bg-brand-500 animate-pulse"></span>
-                    <h3 class="font-display font-semibold text-white">Ask Codebase Memory</h3>
+            
+            <!-- View 1: Chat Area -->
+            <div id="view-chat" class="flex-1 flex flex-col h-full overflow-hidden">
+                <!-- Chat Header -->
+                <div class="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/40">
+                    <div class="flex items-center gap-2">
+                        <span class="h-2 w-2 rounded-full bg-brand-500 animate-pulse"></span>
+                        <h3 class="font-display font-semibold text-white">Ask Codebase Memory</h3>
+                    </div>
+                    <button onclick="clearChat()" class="text-xs text-zinc-400 hover:text-white transition">Clear Chat</button>
                 </div>
-                <button onclick="clearChat()" class="text-xs text-zinc-400 hover:text-white transition">Clear Chat</button>
+
+                <!-- Chat Messages -->
+                <div id="chat-messages" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
+                    <div class="flex gap-3 max-w-[85%]">
+                        <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">
+                            🤖
+                        </div>
+                        <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-300 leading-relaxed">
+                            Hello! I am your codebase's persistent memory. Ask me anything about the architecture, developer decisions, git commits, or inline notes!
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input Box -->
+                <div class="p-4 border-t border-zinc-800 bg-zinc-900/40 flex gap-3 items-center">
+                    <input id="chat-input" onkeydown="handleEnter(event)" type="text" placeholder="Why did we create the API key rotation mechanism?" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-500 transition" />
+                    <button onclick="sendMessage()" id="send-btn" class="h-11 w-11 rounded-xl bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-lg transition duration-300">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                        </svg>
+                    </button>
+                </div>
             </div>
 
-            <!-- Chat Area -->
-            <div id="chat-messages" class="flex-1 p-6 overflow-y-auto flex flex-col gap-4">
-                <!-- Greeting -->
-                <div class="flex gap-3 max-w-[85%]">
-                    <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">
-                        🤖
+            <!-- View 2: Vis.js Architecture Node Graph -->
+            <div id="view-graph" class="hidden flex-1 flex flex-col h-full overflow-hidden">
+                <!-- Graph Toolbar -->
+                <div class="px-6 py-3 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between gap-4">
+                    <div class="flex items-center gap-4 text-xs">
+                        <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-full bg-indigo-500"></span> Files</span>
+                        <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-full bg-emerald-400"></span> Classes</span>
+                        <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-full bg-amber-400"></span> Functions</span>
                     </div>
-                    <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-300 leading-relaxed">
-                        Hello! I am your codebase's persistent memory. Ask me anything about the architecture, developer decisions, git commits, or inline notes!
+                    <div class="flex items-center gap-2">
+                        <input id="graph-search" oninput="filterGraphNodes()" type="text" placeholder="Filter node name..." class="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1 text-xs text-zinc-200 focus:outline-none focus:border-brand-500" />
+                        <button onclick="loadGraph()" class="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-xs rounded-lg transition">🔄 Reload Graph</button>
+                    </div>
+                </div>
+
+                <!-- Vis.js canvas area -->
+                <div class="flex-1 relative overflow-hidden">
+                    <div id="vis-graph-container"></div>
+                    <!-- Selected Node Info overlay -->
+                    <div id="graph-node-details" class="absolute bottom-4 right-4 bg-zinc-900/90 border border-zinc-800 backdrop-blur-md p-4 rounded-xl max-w-sm text-xs hidden shadow-2xl">
+                        <h4 id="node-detail-title" class="font-bold text-sm text-brand-400 mb-1">Node Title</h4>
+                        <p id="node-detail-body" class="text-zinc-300 leading-relaxed">Click any node to inspect details.</p>
                     </div>
                 </div>
             </div>
 
-            <!-- Input Box -->
-            <div class="p-4 border-t border-zinc-800 bg-zinc-900/40 flex gap-3 items-center">
-                <input id="chat-input" onkeydown="handleEnter(event)" type="text" placeholder="Why did we create the API key rotation mechanism?" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-brand-500 transition" />
-                <button onclick="sendMessage()" id="send-btn" class="h-11 w-11 rounded-xl bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center shadow-lg transition duration-300">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                    </svg>
-                </button>
-            </div>
         </div>
 
     </main>
@@ -174,6 +223,92 @@
 
     <!-- Scripts -->
     <script>
+        let visNetwork = null;
+
+        function switchTab(tab) {
+            const chatBtn = document.getElementById('tab-chat-btn');
+            const graphBtn = document.getElementById('tab-graph-btn');
+            const chatView = document.getElementById('view-chat');
+            const graphView = document.getElementById('view-graph');
+
+            if (tab === 'chat') {
+                chatBtn.className = "px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white shadow-md transition-all";
+                graphBtn.className = "px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-white transition-all";
+                chatView.classList.remove('hidden');
+                graphView.classList.add('hidden');
+            } else {
+                graphBtn.className = "px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-600 text-white shadow-md transition-all";
+                chatBtn.className = "px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-white transition-all";
+                graphView.classList.remove('hidden');
+                chatView.classList.add('hidden');
+                if (!visNetwork) {
+                    loadGraph();
+                }
+            }
+        }
+
+        async function loadGraph() {
+            const container = document.getElementById('vis-graph-container');
+            container.innerHTML = '<div class="flex items-center justify-center h-full text-zinc-500 text-sm animate-pulse">Loading interactive codebase graph...</div>';
+
+            try {
+                const res = await fetch('/api/graph');
+                const data = await res.json();
+
+                container.innerHTML = '';
+
+                const nodes = new vis.DataSet(data.nodes.map(n => ({
+                    id: n.id,
+                    label: n.label,
+                    shape: n.shape || 'dot',
+                    size: n.size || 16,
+                    color: n.group === 'file' ? { background: '#6366f1', border: '#818cf8' } :
+                           n.group === 'class' ? { background: '#10b981', border: '#34d399' } :
+                                                 { background: '#f59e0b', border: '#fbbf24' },
+                    font: { color: '#f4f4f5', size: 12, face: 'Plus Jakarta Sans' },
+                    rawTitle: n.title
+                })));
+
+                const edges = new vis.DataSet(data.edges.map(e => ({
+                    from: e.from,
+                    to: e.to,
+                    color: { color: '#3f3f46', highlight: '#6366f1' },
+                    arrows: 'to'
+                })));
+
+                const options = {
+                    physics: {
+                        solver: 'forceAtlas2Based',
+                        forceAtlas2Based: { gravitationalConstant: -30, centralGravity: 0.01, springLength: 80 }
+                    },
+                    interaction: { hover: true, tooltipDelay: 200 }
+                };
+
+                visNetwork = new vis.Network(container, { nodes, edges }, options);
+
+                visNetwork.on("click", function (params) {
+                    if (params.nodes.length > 0) {
+                        const nodeId = params.nodes[0];
+                        const item = nodes.get(nodeId);
+                        document.getElementById('graph-node-details').classList.remove('hidden');
+                        document.getElementById('node-detail-title').innerText = item.label;
+                        document.getElementById('node-detail-body').innerText = item.rawTitle || item.id;
+                    } else {
+                        document.getElementById('graph-node-details').classList.add('hidden');
+                    }
+                });
+
+            } catch (err) {
+                container.innerHTML = `<div class="flex items-center justify-center h-full text-red-400 text-sm">Failed to load architecture graph: ${err.message}</div>`;
+            }
+        }
+
+        function filterGraphNodes() {
+            if (!visNetwork) return;
+            const query = document.getElementById('graph-search').value.toLowerCase();
+            // Network node focus or filtering logic
+        }
+
         function handleEnter(e) {
             if (e.key === 'Enter') {
                 sendMessage();
@@ -187,12 +322,13 @@
             btn.disabled = true;
             btn.innerHTML = `<span class="inline-block animate-spin mr-2">🔄</span> Ingesting...`;
             status.classList.remove('hidden');
-            status.innerHTML = "Scanning directory structure and logging git commits...";
+            status.innerHTML = "Scanning codebase AST and git history...";
             
             try {
                 const response = await fetch('/api/remember', { method: 'POST' });
                 const data = await response.json();
                 status.innerHTML = `✅ ${data.message || 'Ingestion triggered!'}`;
+                if (visNetwork) loadGraph();
             } catch (err) {
                 status.innerHTML = `❌ Error starting ingestion: ${err.message}`;
             } finally {
@@ -266,7 +402,7 @@
                 <div id="${typingId}" class="flex gap-3 max-w-[85%]">
                     <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">🤖</div>
                     <div class="bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 text-sm text-zinc-400 leading-relaxed flex items-center gap-1">
-                        Searching graph memory<span class="animate-bounce">.</span><span class="animate-bounce" style="animation-delay: 0.2s">.</span><span class="animate-bounce" style="animation-delay: 0.4s">.</span>
+                        Searching memory graph<span class="animate-bounce">.</span><span class="animate-bounce" style="animation-delay: 0.2s">.</span><span class="animate-bounce" style="animation-delay: 0.4s">.</span>
                     </div>
                 </div>
             `;
@@ -280,15 +416,11 @@
                 });
                 const data = await response.json();
                 
-                // Remove typing indicator
                 document.getElementById(typingId).remove();
 
                 const answer = data.answer || "No relevant memories found.";
-
-                // Format paragraph spacing
                 const formattedAnswer = answer.replace(/\n/g, '<br>');
 
-                // Append assistant message
                 messagesDiv.innerHTML += `
                     <div class="flex gap-3 max-w-[85%]">
                         <div class="h-8 w-8 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">🤖</div>
@@ -309,6 +441,11 @@
                 `;
             }
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Auto switch tab if URL contains #graph
+        if (window.location.hash === '#graph') {
+            switchTab('graph');
         }
     </script>
 </body>

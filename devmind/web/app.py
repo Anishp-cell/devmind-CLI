@@ -87,3 +87,110 @@ async def api_remember(background_tasks: BackgroundTasks):
     except Exception as e:
         logger.error(f"Error triggering remember: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+def build_codebase_graph_data(project_dir: str) -> dict:
+    """
+    Scans codebase and constructs Vis-network compatible nodes and edges graph payload.
+    """
+    from devmind.ingestion.file_reader import scan_codebase_files
+    files = scan_codebase_files(project_dir)
+    
+    nodes = []
+    edges = []
+    node_ids = set()
+
+    total_classes = 0
+    total_funcs = 0
+
+    for file_data in files:
+        rel_path = file_data["relative_path"]
+        file_id = f"file:{rel_path}"
+        if file_id not in node_ids:
+            node_ids.add(file_id)
+            nodes.append({
+                "id": file_id,
+                "label": os.path.basename(rel_path),
+                "group": "file",
+                "title": f"File: {rel_path}",
+                "path": rel_path,
+                "shape": "dot",
+                "size": 22
+            })
+            
+        symbols = file_data.get("ast_symbols", {})
+        classes = symbols.get("classes", [])
+        total_classes += len(classes)
+        for cls in classes:
+            cls_id = f"class:{rel_path}:{cls['name']}"
+            if cls_id not in node_ids:
+                node_ids.add(cls_id)
+                nodes.append({
+                    "id": cls_id,
+                    "label": f"Class {cls['name']}",
+                    "group": "class",
+                    "title": f"Class {cls['name']} in {rel_path}",
+                    "shape": "diamond",
+                    "size": 16
+                })
+                edges.append({"from": file_id, "to": cls_id, "label": "defines"})
+                
+        functions = symbols.get("functions", [])
+        total_funcs += len(functions)
+        for fn in functions:
+            fn_id = f"func:{rel_path}:{fn['name']}"
+            if fn_id not in node_ids:
+                node_ids.add(fn_id)
+                nodes.append({
+                    "id": fn_id,
+                    "label": f"fn {fn['name']}()",
+                    "group": "func",
+                    "title": f"Function {fn['name']} in {rel_path}",
+                    "shape": "triangle",
+                    "size": 12
+                })
+                edges.append({"from": file_id, "to": fn_id, "label": "defines"})
+
+    return {
+        "nodes": nodes, 
+        "edges": edges, 
+        "stats": {
+            "total_files": len(files),
+            "total_classes": total_classes,
+            "total_funcs": total_funcs,
+            "total_nodes": len(nodes),
+            "total_edges": len(edges)
+        }
+    }
+
+
+@app.get("/api/graph")
+async def api_graph():
+    """
+    Returns visual architecture node graph JSON.
+    """
+    try:
+        project_dir = os.getcwd()
+        graph_data = build_codebase_graph_data(project_dir)
+        return graph_data
+    except Exception as e:
+        logger.error(f"Error building graph data: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/digest")
+async def api_digest():
+    """
+    Returns high-level codebase metrics summary digest.
+    """
+    try:
+        project_dir = os.getcwd()
+        graph_data = build_codebase_graph_data(project_dir)
+        return {
+            "project": os.path.basename(os.path.abspath(project_dir)),
+            "stats": graph_data["stats"]
+        }
+    except Exception as e:
+        logger.error(f"Error building digest data: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
