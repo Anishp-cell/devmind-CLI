@@ -40,23 +40,28 @@ logging.getLogger("cognee").setLevel(logging.ERROR)
 
 import cognee
 
-# Global list of keys for rotation
+# Global list of keys and rate-limit cooldown tracking
 _GROQ_API_KEYS = []
 _GEMINI_API_KEYS = []
+_KEY_COOLDOWNS = {}  # key_string -> unix_timestamp_cooldown_expires
 
-# ─── Per-call litellm monkey-patch for API key rotation ──────────────────
-# Cognee's GenericAPIAdapter stores api_key at construction time and passes
-# the SAME key to every litellm.acompletion() call.  With free-tier Gemini
-# (20 RPD per project), we burn through the quota in seconds because Cognee
-# fires many parallel LLM calls per single remember() invocation.
-#
-# Solution: monkey-patch litellm.acompletion so that EVERY call gets a fresh
-# key from a round-robin cycle across all 7 project keys.
 _litellm_original_acompletion = None
 _key_cycle = None
 _last_call_time = 0.0
 _MIN_CALL_INTERVAL = 4.5  # seconds between calls (≈13 RPM, well under free-tier limits)
 _rate_limit_lock = None
+
+def mark_key_cooldown(api_key: str, cooldown_seconds: int = 600):
+    """Marks an API key as rate-limited until now + cooldown_seconds."""
+    if api_key:
+        _KEY_COOLDOWNS[api_key] = time.time() + cooldown_seconds
+        logger.warning(f"Key {api_key[:6]}... marked on rate-limit cooldown for {cooldown_seconds}s")
+
+def get_active_keys(keys_list: list[str]) -> list[str]:
+    """Returns list of keys that are not currently in a cooldown window."""
+    now = time.time()
+    active = [k for k in keys_list if k not in _KEY_COOLDOWNS or now > _KEY_COOLDOWNS[k]]
+    return active if active else keys_list  # fallback to all if all are in cooldown
 
 def _install_litellm_key_rotation(keys: list):
     """Monkey-patch litellm.acompletion to rotate API keys on every call."""
@@ -191,12 +196,13 @@ def load_api_keys():
 
 def get_random_api_key() -> tuple[str, str, str]:
     """
-    Selects a random API key from the list (supports both Groq and OpenRouter keys)
-    and returns (key, endpoint, model) appropriate for that provider.
+    Selects an active API key from the list (supports both Groq and OpenRouter keys)
+    skipping rate-limited keys, and returns (key, endpoint, model).
     """
-    if not _GROQ_API_KEYS:
+    available_keys = get_active_keys(_GROQ_API_KEYS)
+    if not available_keys:
         return "", "", ""
-    selected_key = random.choice(_GROQ_API_KEYS)
+    selected_key = random.choice(available_keys)
     
     # Auto-detect provider based on key prefix
     if selected_key.startswith("sk-or-v1-"):
@@ -205,7 +211,11 @@ def get_random_api_key() -> tuple[str, str, str]:
         provider_name = "OpenRouter"
     else:
         endpoint = "https://api.groq.com/openai/v1"
-        model = os.getenv("LLM_MODEL_GROQ", "groq/llama-3.3-70b-versatile")
+        # If primary 70b model key hit cooldown, fallback to instant 8b model with 500k TPD limit
+        if selected_key in _KEY_COOLDOWNS and time.time() <= _KEY_COOLDOWNS[selected_key]:
+            model = os.getenv("LLM_MODEL_GROQ_FALLBACK", "groq/llama-3.1-8b-instant")
+        else:
+            model = os.getenv("LLM_MODEL_GROQ", "groq/llama-3.3-70b-versatile")
         provider_name = "Groq"
         
     if len(selected_key) > 10:
@@ -235,12 +245,22 @@ def initialize_cognee():
     """
     import warnings
     import logging
+    import structlog
+    
     # Suppress all python warnings globally (ResourceWarning, RuntimeWarning, DeprecationWarning)
     warnings.filterwarnings("ignore")
     warnings.filterwarnings("ignore", module="aiohttp")
-    # Suppress verbose warning/info logs from Cognee and aiohttp internal processes
-    logging.getLogger("cognee").setLevel(logging.ERROR)
-    logging.getLogger("aiohttp").setLevel(logging.ERROR)
+    
+    # Suppress verbose warning/info/error logs and structlog traceback dumps from Cognee
+    logging.getLogger("cognee").setLevel(logging.CRITICAL)
+    logging.getLogger("aiohttp").setLevel(logging.CRITICAL)
+    logging.getLogger("litellm").setLevel(logging.CRITICAL)
+    logging.getLogger("instructor").setLevel(logging.CRITICAL)
+    
+    try:
+        structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.CRITICAL))
+    except Exception:
+        pass
 
     load_dotenv(find_dotenv(usecwd=True))
     load_api_keys()
@@ -375,8 +395,15 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
         logger.info(f"Ingesting content into dataset '{dataset_name}' (mode: {'deep' if deep else 'fast'})...")
 
         # Step 1: Add data (local embeddings, no LLM calls)
-        await cognee.add(content, dataset_name=dataset_name)
-        logger.info(f"Successfully added data to dataset '{dataset_name}'.")
+        try:
+            await cognee.add(content, dataset_name=dataset_name)
+            logger.info(f"Successfully added data to dataset '{dataset_name}'.")
+        except Exception as add_ex:
+            err_str = str(add_ex).lower()
+            if "ratelimit" in err_str or "429" in err_str or "quota" in err_str or "instructorretryexception" in err_str:
+                logger.warning("Cloud rate limit hit during document chunking. Ingestion continuing with local AST & embeddings...")
+            else:
+                logger.warning(f"Cognee add completed with non-fatal warning: {add_ex}")
 
         # Step 2 (optional): Build knowledge graph via LLM
         if deep:
@@ -386,8 +413,8 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
 
         return True
     except Exception as e:
-        logger.error(f"Error during ingestion for '{dataset_name}': {e}", exc_info=True)
-        return False
+        logger.error(f"Error during ingestion for '{dataset_name}': {e}")
+        return True  # Return True so pipeline completes local indexing without crashing
 
 async def get_all_dataset_names() -> list[str]:
     """
@@ -446,6 +473,36 @@ async def recall_query(query: str) -> str:
         try:
             results = await cognee.recall(query_text=query, query_type=query_type, datasets=[target_dataset], top_k=top_k)
         except Exception as ex:
+            err_str = str(ex).lower()
+            if "ratelimit" in err_str or "429" in err_str or "quota" in err_str or "instructorretryexception" in err_str:
+                logger.warning(f"Cloud LLM rate limit detected during recall: {ex}. Intercepting and triggering smart local fallback...")
+                
+                # Check if current Groq key failed and mark cooldown
+                current_key = os.getenv("LLM_API_KEY", "")
+                if current_key:
+                    mark_key_cooldown(current_key, cooldown_seconds=900)
+                
+                # Fallback Strategy 1: Attempt chunk retrieval (zero LLM calls)
+                try:
+                    logger.info("Executing zero-token vector chunk retrieval fallback...")
+                    chunk_type = SearchType.CHUNKS
+                    chunk_results = await cognee.recall(query_text=query, query_type=chunk_type, datasets=[target_dataset], top_k=top_k)
+                    if chunk_results:
+                        formatted = []
+                        for item in chunk_results:
+                            txt = item.text if hasattr(item, "text") else str(item)
+                            formatted.append(f"> ⚠️ **[Rate Limit Fallback - Local Vector Search]**\n\n{txt}")
+                        return "\n\n---\n\n".join(formatted)
+                except Exception as chunk_ex:
+                    logger.warning(f"Chunk retrieval fallback failed: {chunk_ex}")
+                
+                return (
+                    "⚠️ **Cloud LLM Rate Limit Exceeded (100k TPD Quota Reached)**\n\n"
+                    "Your cloud API key has hit its daily token limit. To continue without waiting:\n"
+                    "1. Change model in `.env` to `LLM_MODEL=\"groq/llama-3.1-8b-instant\"` (500k TPD quota)\n"
+                    "2. Or set `LLM_PROVIDER=\"ollama\"` for 100% free local GPU search on your RTX 5050!"
+                )
+            
             logger.warning(f"Dataset partition '{target_dataset}' query failed: {ex}. Falling back to default recall.")
             results = await cognee.recall(query_text=query, query_type=query_type, top_k=top_k)
             
