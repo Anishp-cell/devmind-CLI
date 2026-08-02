@@ -31,6 +31,14 @@ os.environ["CACHE_ROOT_DIRECTORY"] = os.path.join(project_root, ".cognee_cache")
 os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
 os.environ["LOG_LEVEL"] = "ERROR"
 os.environ["LITELLM_SUPPRESS_PROVIDER_INFO"] = "True"
+os.environ["LITELLM_LOG"] = "ERROR"
+
+try:
+    import litellm
+    litellm.suppress_debug_info = True
+    litellm.set_verbose = False
+except Exception:
+    pass
 
 import logging
 import warnings
@@ -470,44 +478,19 @@ async def recall_query(query: str) -> str:
         top_k = int(os.getenv("DEVMIND_RECALL_TOP_K", "3"))
         
         logger.info(f"Searching memory dataset '{target_dataset}' (top_k={top_k})...")
+        results = None
         try:
             results = await cognee.recall(query_text=query, query_type=query_type, datasets=[target_dataset], top_k=top_k)
         except Exception as ex:
-            err_str = str(ex).lower()
-            if "ratelimit" in err_str or "429" in err_str or "quota" in err_str or "instructorretryexception" in err_str:
-                logger.warning(f"Cloud LLM rate limit detected during recall: {ex}. Intercepting and triggering smart local fallback...")
-                
-                # Check if current Groq key failed and mark cooldown
-                current_key = os.getenv("LLM_API_KEY", "")
-                if current_key:
-                    mark_key_cooldown(current_key, cooldown_seconds=900)
-                
-                # Fallback Strategy 1: Attempt chunk retrieval (zero LLM calls)
-                try:
-                    logger.info("Executing zero-token vector chunk retrieval fallback...")
-                    chunk_type = SearchType.CHUNKS
-                    chunk_results = await cognee.recall(query_text=query, query_type=chunk_type, datasets=[target_dataset], top_k=top_k)
-                    if chunk_results:
-                        formatted = []
-                        for item in chunk_results:
-                            txt = item.text if hasattr(item, "text") else str(item)
-                            formatted.append(f"> ⚠️ **[Rate Limit Fallback - Local Vector Search]**\n\n{txt}")
-                        return "\n\n---\n\n".join(formatted)
-                except Exception as chunk_ex:
-                    logger.warning(f"Chunk retrieval fallback failed: {chunk_ex}")
-                
-                return (
-                    "⚠️ **Cloud LLM Rate Limit Exceeded (100k TPD Quota Reached)**\n\n"
-                    "Your cloud API key has hit its daily token limit. To continue without waiting:\n"
-                    "1. Change model in `.env` to `LLM_MODEL=\"groq/llama-3.1-8b-instant\"` (500k TPD quota)\n"
-                    "2. Or set `LLM_PROVIDER=\"ollama\"` for 100% free local GPU search on your RTX 5050!"
-                )
-            
-            logger.warning(f"Dataset partition '{target_dataset}' query failed: {ex}. Falling back to default recall.")
-            results = await cognee.recall(query_text=query, query_type=query_type, top_k=top_k)
-            
+            logger.warning(f"Primary RAG recall failed ({ex}). Attempting fallback vector chunk recall...")
+            try:
+                results = await cognee.recall(query_text=query, query_type=SearchType.CHUNKS, top_k=top_k)
+            except Exception as ex2:
+                logger.warning(f"Fallback chunk recall failed: {ex2}")
+                results = []
+
         if not results:
-            return "No relevant memories found."
+            return "No relevant memories found in codebase index."
         
         # Cognee returns a list of result objects or dictionaries. 
         # Format the output cleanly for console display by deduplicating identical or fallback responses.
