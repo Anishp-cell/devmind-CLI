@@ -371,20 +371,20 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
     Ingests text content into Cognee memory under a specified dataset name.
 
     Two modes:
-      - **fast** (default, deep=False): Runs `cognee.add()` only.
-        Stores data + creates local vector embeddings (FastEmbed, 0 LLM calls).
-        Instant, never triggers API rate-limit / tenacity errors.
+      - **fast** (default, deep=False): Uses `cognee.add()` with fast 8b-instant model.
+        Stores data + creates local vector embeddings (FastEmbed).
+        Instant, avoids 70b daily rate-limit exhaustion.
       - **deep** (deep=True): Runs `cognee.add()` then `cognee.cognify()`.
         Builds a full knowledge graph via LLM entity extraction.
-        Requires valid LLM API keys and may be slow / rate-limited.
     """
     try:
         # Per-call key rotation for Groq provider
         if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
-            if not groq_key and deep:
-                logger.error("No API keys available. Aborting deep memory ingestion.")
-                return False
+            # If not deep mode, use fast 8b-instant model (500k TPD quota)
+            if not deep:
+                model = os.getenv("LLM_MODEL_GROQ_FALLBACK", "groq/llama-3.1-8b-instant")
+            
             if groq_key:
                 os.environ["LLM_API_KEY"] = groq_key
                 os.environ["LLM_ENDPOINT"] = endpoint
@@ -394,7 +394,7 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
 
         logger.info(f"Ingesting content into dataset '{dataset_name}' (mode: {'deep' if deep else 'fast'})...")
 
-        # Step 1: Add data (local embeddings, no LLM calls)
+        # Step 1: Add data
         try:
             await cognee.add(content, dataset_name=dataset_name)
             logger.info(f"Successfully added data to dataset '{dataset_name}'.")
@@ -403,7 +403,7 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
             if "ratelimit" in err_str or "429" in err_str or "quota" in err_str or "instructorretryexception" in err_str:
                 logger.warning("Cloud rate limit hit during document chunking. Ingestion continuing with local AST & embeddings...")
             else:
-                logger.warning(f"Cognee add completed with non-fatal warning: {add_ex}")
+                logger.warning(f"Cognee add completed: {add_ex}")
 
         # Step 2 (optional): Build knowledge graph via LLM
         if deep:
@@ -414,7 +414,7 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
         return True
     except Exception as e:
         logger.error(f"Error during ingestion for '{dataset_name}': {e}")
-        return True  # Return True so pipeline completes local indexing without crashing
+        return True
 
 async def get_all_dataset_names() -> list[str]:
     """
