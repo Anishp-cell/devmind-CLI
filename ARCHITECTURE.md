@@ -1,8 +1,6 @@
 # DevMind Architecture Design
 
-This document details the software architecture, module layout, and interface designs for **DevMind – Codebase Memory for Developers**. It serves as our blueprint for implementation once the hackathon officially starts.
-
----
+This document details the software architecture, module layout, and interface designs for **DevMind – Codebase Memory for Developers**. It serves as our blueprint for implementation once the hackathon officially starts
 
 ## 1. System Overview
 

@@ -55,14 +55,21 @@ app = typer.Typer(
     add_completion=False
 )
 
-async def remember_pipeline(directory: str, incremental: bool = False):
+async def remember_pipeline(directory: str, incremental: bool = False, deep: bool = False):
     """
     Core async pipeline for scanning files, comments, and git logs,
     and loading them into Cognee.
+
+    Args:
+        deep: If True, runs cognee.cognify() after add() to build a
+              full LLM-extracted knowledge graph. Default is False
+              (fast mode: local embeddings only, 0 API calls).
     """
     # Determine a single, unified dataset name based on the target folder
     folder_name = os.path.basename(os.path.abspath(directory)).lower().replace("-", "_").replace(" ", "_")
     dataset_name = f"devmind_{folder_name}"
+
+    mode_label = "deep (LLM graph extraction)" if deep else "fast (local embeddings only)"
 
     # 1. Scan the codebase files
     files = scan_codebase_files(directory)
@@ -79,7 +86,7 @@ async def remember_pipeline(directory: str, incremental: bool = False):
             typer.echo("Incremental mode: No changed files detected via git diff.")
             return
 
-    typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name})...")
+    typer.echo(f"Ingesting {len(files)} files into Cognee memory (Dataset: {dataset_name}) [{mode_label}]...")
     
     # Ingest file contents in a single batch
     contents = []
@@ -92,7 +99,7 @@ async def remember_pipeline(directory: str, incremental: bool = False):
         contents.append(tagged_content)
         
     logger.info(f"Batched {len(contents)} files. Triggering ingestion pipeline...")
-    success = await remember_content(contents, dataset_name=dataset_name)
+    success = await remember_content(contents, dataset_name=dataset_name, deep=deep)
     if success:
         typer.echo(f"Successfully remembered {len(files)} files.")
     else:
@@ -103,7 +110,7 @@ async def remember_pipeline(directory: str, incremental: bool = False):
     if git_logs:
         typer.echo("Ingesting combined git history into Cognee...")
         combined_git = "\n\n---\n\n".join(git_logs)
-        success = await remember_content(combined_git, dataset_name=dataset_name)
+        success = await remember_content(combined_git, dataset_name=dataset_name, deep=deep)
         if success:
             typer.echo("Successfully remembered git history.")
         else:
@@ -115,7 +122,7 @@ async def remember_pipeline(directory: str, incremental: bool = False):
     if comments:
         typer.echo("Ingesting combined inline comments into Cognee...")
         combined_comments = "\n\n---\n\n".join(comments)
-        success = await remember_content(combined_comments, dataset_name=dataset_name)
+        success = await remember_content(combined_comments, dataset_name=dataset_name, deep=deep)
         if success:
             typer.echo("Successfully remembered code comments.")
         else:
@@ -132,14 +139,22 @@ def remember(
         False,
         "--incremental", "-i",
         help="Only scan and ingest files modified or changed in git diff."
+    ),
+    deep: bool = typer.Option(
+        False,
+        "--deep",
+        help="Run full LLM knowledge-graph extraction (slower, requires API keys). Default: fast local-only mode."
     )
 ):
     """
     Ingest the codebase files into persistent Cognee memory.
+
+    By default, uses fast local-only mode (0 API calls, instant).
+    Use --deep to enable LLM-powered knowledge graph extraction.
     """
     initialize_cognee()
     resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
-    run_async(remember_pipeline(resolved_dir, incremental=incremental))
+    run_async(remember_pipeline(resolved_dir, incremental=incremental, deep=deep))
     typer.echo("[Success] Codebase memory ingestion completed.")
 
 @app.command()

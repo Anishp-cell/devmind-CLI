@@ -346,32 +346,47 @@ def initialize_cognee():
     logger.info(f"System Storage Path: {system_path}")
     logger.info(f"Data Storage Path: {data_path}")
 
-async def remember_content(content: str | list[str], dataset_name: str) -> bool:
+async def remember_content(content: str | list[str], dataset_name: str, deep: bool = False) -> bool:
     """
-    Ingests text content or a list of contents into Cognee memory under a specified dataset name.
+    Ingests text content into Cognee memory under a specified dataset name.
+
+    Two modes:
+      - **fast** (default, deep=False): Runs `cognee.add()` only.
+        Stores data + creates local vector embeddings (FastEmbed, 0 LLM calls).
+        Instant, never triggers API rate-limit / tenacity errors.
+      - **deep** (deep=True): Runs `cognee.add()` then `cognee.cognify()`.
+        Builds a full knowledge graph via LLM entity extraction.
+        Requires valid LLM API keys and may be slow / rate-limited.
     """
     try:
-        # Per-call key rotation is now handled by the litellm monkey-patch
-        # (see _install_litellm_key_rotation). For Groq (non-Gemini), we still
-        # rotate at the per-file level as a fallback.
+        # Per-call key rotation for Groq provider
         if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
             groq_key, endpoint, model = get_random_api_key()
-            if not groq_key:
-                logger.error("No API keys available. Aborting memory ingestion.")
+            if not groq_key and deep:
+                logger.error("No API keys available. Aborting deep memory ingestion.")
                 return False
-            
-            os.environ["LLM_API_KEY"] = groq_key
-            os.environ["LLM_ENDPOINT"] = endpoint
-            cognee.config.set_llm_endpoint(endpoint)
-            cognee.config.set_llm_api_key(groq_key)
-            cognee.config.set_llm_model(model)
+            if groq_key:
+                os.environ["LLM_API_KEY"] = groq_key
+                os.environ["LLM_ENDPOINT"] = endpoint
+                cognee.config.set_llm_endpoint(endpoint)
+                cognee.config.set_llm_api_key(groq_key)
+                cognee.config.set_llm_model(model)
 
-        logger.info(f"Remembering content in dataset '{dataset_name}'...")
-        await cognee.remember(content, dataset_name=dataset_name)
-        logger.info(f"Successfully remembered dataset '{dataset_name}'.")
+        logger.info(f"Ingesting content into dataset '{dataset_name}' (mode: {'deep' if deep else 'fast'})...")
+
+        # Step 1: Add data (local embeddings, no LLM calls)
+        await cognee.add(content, dataset_name=dataset_name)
+        logger.info(f"Successfully added data to dataset '{dataset_name}'.")
+
+        # Step 2 (optional): Build knowledge graph via LLM
+        if deep:
+            logger.info(f"Running deep cognify on dataset '{dataset_name}'...")
+            await cognee.cognify(datasets=[dataset_name])
+            logger.info(f"Successfully cognified dataset '{dataset_name}'.")
+
         return True
     except Exception as e:
-        logger.error(f"Error during cognee.remember for '{dataset_name}': {e}", exc_info=True)
+        logger.error(f"Error during ingestion for '{dataset_name}': {e}", exc_info=True)
         return False
 
 async def get_all_dataset_names() -> list[str]:
