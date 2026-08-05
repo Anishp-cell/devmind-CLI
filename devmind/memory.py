@@ -29,7 +29,7 @@ os.environ["SYSTEM_ROOT_DIRECTORY"] = system_path
 os.environ["DATA_ROOT_DIRECTORY"] = data_path
 os.environ["CACHE_ROOT_DIRECTORY"] = os.path.join(project_root, ".cognee_cache")
 os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
-os.environ["LOG_LEVEL"] = "ERROR"
+os.environ["LOG_LEVEL"] = "CRITICAL"
 os.environ["LITELLM_SUPPRESS_PROVIDER_INFO"] = "True"
 os.environ["LITELLM_LOG"] = "ERROR"
 
@@ -44,7 +44,8 @@ import logging
 import warnings
 # Silence all warnings globally before Cognee imports or sets up its loggers
 warnings.filterwarnings("ignore")
-logging.getLogger("cognee").setLevel(logging.ERROR)
+logging.getLogger("cognee").setLevel(logging.CRITICAL)
+logging.getLogger().setLevel(logging.CRITICAL)
 
 import cognee
 
@@ -379,11 +380,11 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
     Ingests text content into Cognee memory under a specified dataset name.
 
     Two modes:
-      - **fast** (default, deep=False): Uses `cognee.add()` with fast 8b-instant model.
-        Stores data + creates local vector embeddings (FastEmbed).
-        Instant, avoids 70b daily rate-limit exhaustion.
-      - **deep** (deep=True): Runs `cognee.add()` then `cognee.cognify()`.
-        Builds a full knowledge graph via LLM entity extraction.
+      - **fast** (default, deep=False): Uses `cognee.add()` then runs a minimal
+        cognify pipeline (classify → chunk → embed → store) that creates vector
+        embeddings WITHOUT LLM entity extraction. Instant, zero API cost.
+      - **deep** (deep=True): Runs `cognee.add()` then full `cognee.cognify()`.
+        Builds a knowledge graph via LLM entity extraction (uses API tokens).
     """
     try:
         # Per-call key rotation for Groq provider
@@ -402,7 +403,7 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
 
         logger.info(f"Ingesting content into dataset '{dataset_name}' (mode: {'deep' if deep else 'fast'})...")
 
-        # Step 1: Add data
+        # Step 1: Add data (stores raw content in relational DB)
         try:
             await cognee.add(content, dataset_name=dataset_name)
             logger.info(f"Successfully added data to dataset '{dataset_name}'.")
@@ -413,16 +414,74 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
             else:
                 logger.warning(f"Cognee add completed: {add_ex}")
 
-        # Step 2 (optional): Build knowledge graph via LLM
+        # Step 2: Create vector embeddings so recall() can search
         if deep:
+            # Full cognify: LLM entity extraction + knowledge graph + embeddings
             logger.info(f"Running deep cognify on dataset '{dataset_name}'...")
             await cognee.cognify(datasets=[dataset_name])
             logger.info(f"Successfully cognified dataset '{dataset_name}'.")
+        else:
+            # Fast cognify: classify → chunk → store embeddings (NO LLM calls)
+            # This creates the DocumentChunk_text vector collection that recall() needs
+            logger.info(f"Running fast cognify (local embeddings only) on '{dataset_name}'...")
+            try:
+                await _fast_cognify(dataset_name)
+                logger.info(f"Fast cognify completed for '{dataset_name}'.")
+            except Exception as cognify_ex:
+                logger.warning(f"Fast cognify warning: {cognify_ex}")
 
         return True
     except Exception as e:
         logger.error(f"Error during ingestion for '{dataset_name}': {e}")
         return True
+
+
+async def _fast_cognify(dataset_name: str):
+    """
+    Runs a minimal cognify pipeline that creates vector embeddings WITHOUT
+    LLM entity extraction. This makes recall() work in fast mode.
+    
+    Pipeline: classify_documents → extract_chunks → add_data_points (embed + store)
+    Skips: extract_graph_and_summarize (the expensive LLM step)
+    """
+    from cognee.modules.pipelines import run_pipeline
+    from cognee.modules.pipelines.tasks.task import Task
+    from cognee.modules.chunking.TextChunker import TextChunker
+    from cognee.infrastructure.llm import get_max_chunk_tokens
+    from cognee.tasks.documents import classify_documents, extract_chunks_from_documents
+    from cognee.tasks.storage import add_data_points
+    from cognee.modules.pipelines.layers.pipeline_execution_mode import get_pipeline_executor
+    from cognee.modules.engine.operations.setup import setup
+
+    await setup()
+
+    tasks = [
+        # Classify raw data into typed Document objects
+        Task(classify_documents),
+        # Split documents into semantic text chunks
+        Task(
+            extract_chunks_from_documents,
+            max_chunk_size=get_max_chunk_tokens(),
+            chunker=TextChunker,
+        ),
+        # Store chunks with vector embeddings (FastEmbed, no LLM calls)
+        Task(
+            add_data_points,
+            embed_triplets=False,
+            task_config={"batch_size": 100},
+        ),
+    ]
+
+    pipeline_executor_func = get_pipeline_executor(run_in_background=False)
+
+    await pipeline_executor_func(
+        pipeline=run_pipeline,
+        tasks=tasks,
+        datasets=[dataset_name],
+        incremental_loading=True,
+        use_pipeline_cache=False,
+        pipeline_name="fast_cognify_pipeline",
+    )
 
 async def get_all_dataset_names() -> list[str]:
     """

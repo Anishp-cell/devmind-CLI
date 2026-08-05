@@ -25,8 +25,10 @@ logger = logging.getLogger("devmind.cli")
 
 def run_async(coro):
     """
-    Custom asyncio runner that cancels pending background telemetry tasks
-    and sets an exception handler to swallow Win32 socket teardown warnings.
+    Custom asyncio runner that:
+    1. Cancels pending background tasks (Cognee telemetry fire-and-forget)
+    2. Explicitly closes Cognee's singleton aiohttp.ClientSession
+    3. Suppresses stderr during cleanup to silence any remaining aiohttp warnings
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -34,7 +36,7 @@ def run_async(coro):
     def silence_exceptions(loop, context):
         exc = context.get("exception")
         msg = context.get("message", "")
-        # Swallows Win32 10038/not-a-socket/Event loop is closed/telemetry warnings during exit
+        # Swallow Win32 10038/not-a-socket/Event loop is closed/telemetry warnings during exit
         if (exc and ("Event loop is closed" in str(exc) or "10038" in str(exc) or "socket" in str(exc))) or "Event loop is closed" in msg or "SSL transport" in msg:
             return
         loop.default_exception_handler(context)
@@ -44,16 +46,35 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         try:
-            # Cancel all background tasks (telemetry, aiohttp sessions) so they don't dump warnings on exit
+            # Cancel all pending background tasks (telemetry, etc.)
             pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
             for task in pending:
                 task.cancel()
             if pending:
                 loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+            # Explicitly close Cognee's singleton telemetry aiohttp session
+            # This prevents "Unclosed client session" / "Unclosed connector" stderr dumps
+            try:
+                from cognee.shared.utils import _telemetry_session
+                if _telemetry_session is not None and not _telemetry_session.closed:
+                    loop.run_until_complete(_telemetry_session.close())
+            except Exception:
+                pass
+
             loop.run_until_complete(loop.shutdown_asyncgens())
         except Exception:
             pass
-        loop.close()
+
+        # Suppress any remaining stderr output during GC/loop teardown
+        import io
+        _real_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            loop.close()
+        finally:
+            sys.stderr = _real_stderr
+
 
 app = typer.Typer(
     name="devmind",
