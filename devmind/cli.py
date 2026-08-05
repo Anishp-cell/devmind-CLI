@@ -25,8 +25,8 @@ logger = logging.getLogger("devmind.cli")
 
 def run_async(coro):
     """
-    Custom asyncio runner that sets an exception handler to swallow 
-    noisy Win32 socket teardown/closed event loop warnings on shutdown.
+    Custom asyncio runner that cancels pending background telemetry tasks
+    and sets an exception handler to swallow Win32 socket teardown warnings.
     """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -34,7 +34,7 @@ def run_async(coro):
     def silence_exceptions(loop, context):
         exc = context.get("exception")
         msg = context.get("message", "")
-        # Swallows Win32 10038/not-a-socket/Event loop is closed warnings during exit
+        # Swallows Win32 10038/not-a-socket/Event loop is closed/telemetry warnings during exit
         if (exc and ("Event loop is closed" in str(exc) or "10038" in str(exc) or "socket" in str(exc))) or "Event loop is closed" in msg or "SSL transport" in msg:
             return
         loop.default_exception_handler(context)
@@ -44,6 +44,12 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         try:
+            # Cancel all background tasks (telemetry, aiohttp sessions) so they don't dump warnings on exit
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             loop.run_until_complete(loop.shutdown_asyncgens())
         except Exception:
             pass
@@ -176,7 +182,7 @@ def ask(
     console.print(Panel(
         Markdown(answer),
         title="[bold magenta]DevMind Memory Response[/bold magenta]",
-        border_style="indigo",
+        border_style="cyan",
         padding=(1, 2)
     ))
 
