@@ -32,11 +32,13 @@ os.environ["ENABLE_BACKEND_ACCESS_CONTROL"] = "false"
 os.environ["LOG_LEVEL"] = "CRITICAL"
 os.environ["LITELLM_SUPPRESS_PROVIDER_INFO"] = "True"
 os.environ["LITELLM_LOG"] = "ERROR"
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 try:
     import litellm
     litellm.suppress_debug_info = True
     litellm.set_verbose = False
+    litellm.telemetry = False
 except Exception:
     pass
 
