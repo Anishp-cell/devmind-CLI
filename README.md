@@ -1,123 +1,165 @@
-# DevMind – Codebase Memory for Developers
+# DevMind — Semantic Codebase Memory & Intelligence Engine
 
-> "Your codebase finally has a memory."
+> **"Your codebase finally has a persistent memory."**  
+> An open-source, local-first Codebase Memory and Static Intelligence Engine powered by **Cognee**, **FastEmbed**, **LanceDB**, and **FastMCP**.
 
-DevMind is a developer CLI tool and local web interface that gives your codebase a persistent, queryable memory powered by **Cognee**. It scans source files, git commit history, comments, and architectural decisions, building a hybrid graph-vector knowledge store. This persistent memory allows developers and AI coding assistants (via MCP) to query the codebase in plain English and carry context across infinite sessions.
-
----
-
-## Features
-
-1. **One-Command Ingestion** (`devmind remember`): Scans the codebase, git logs, and code comments to feed `cognee.remember()`.
-2. **Plain-English Q&A** (`devmind ask "..."`): Uses `cognee.recall()` to retrieve grounded, context-aware answers from the memory graph.
-3. **Decision Logging** (`devmind log "..."`): Records Architecture Decision Records (ADRs) to capture design reasoning.
-4. **Memory Refresh** (`devmind refresh`): Automatically detects modified files, updates the graph, and runs `cognee.improve()`.
-5. **Surgical Forget** (`devmind forget --file ...`): Prunes specific file memory from the knowledge graph using `cognee.forget()`.
-6. **Claude Code MCP Server** (`devmind mcp`): Seamlessly integrates with Claude Code or Cursor via standard Model Context Protocol (MCP).
-7. **Local Dashboard UI** (`devmind dashboard`): Provides a clean visual panel showing memory status, search queries, and recent decisions.
-8. **Smart API Key Rotation**: Automatically detects, formats, and rotates between multiple Groq and OpenRouter API keys to balance rate limits on free-tier LLM access.
+[![PyPI Version](https://img.shields.io/pypi/v/devmind-cli.svg)](https://pypi.org/project/devmind-cli/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastMCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 ---
 
-## Installation & Setup
+## ⚡ Quickstart (30 Seconds)
 
-### 1. Clone the repository
+Get up and running in any project with just three commands:
+
 ```bash
-git clone https://github.com/Anishp-cell/devmind-CLI.git
-cd devmind-CLI
+# 1. Install via PyPI
+pip install devmind-cli
+
+# 2. Interactive Setup (Configure free Cloud API or 100% Local Ollama)
+devmind init
+
+# 3. Index Codebase & Ask Questions
+devmind remember
+devmind ask "Where is the authentication flow handled and how are tokens validated?"
 ```
 
-### 2. Configure Environment Variables
-Copy `.env.example` to `.env` and fill in your keys:
+---
+
+## 🦙 100% Local & Offline Setup with Ollama (Step-by-Step)
+
+If you want **complete data privacy** with zero tokens leaving your machine, you can run DevMind entirely on local models using **Ollama**:
+
+### Step 1: Install Ollama
+Download and install Ollama for your operating system:
+* **macOS / Windows**: Download from [ollama.com](https://ollama.com/download)
+* **Linux**:
+  ```bash
+  curl -fsSL https://ollama.com/install.sh | sh
+  ```
+
+### Step 2: Download a Coding Model
+Open your terminal and pull your preferred model:
 ```bash
-cp .env.example .env
-```
-To run for **free**, configure your `.env` with a list of rotated API keys:
-```env
-LLM_PROVIDER="groq"
+# Recommended lightweight model (Fast & works on any laptop):
+ollama pull llama3.2
 
-# Add a comma-separated list of Groq keys (gsk_...) and/or OpenRouter keys (sk-or-v1-...)
-# The CLI automatically load-balances and routes requests to the correct endpoints!
-GROQ_API_KEYS="gsk_key1,sk-or-v1-key2,gsk_key3"
-
-EMBEDDING_PROVIDER="fastembed"
-EMBEDDING_MODEL="BAAI/bge-small-en-v1.5"
-EMBEDDING_DIMENSIONS="384"
+# Recommended for high-accuracy coding tasks:
+ollama pull qwen2.5-coder:7b
+# or
+ollama pull mistral
 ```
 
-### 3. Install DevMind
-Install the package in editable mode:
+### Step 3: Ensure Ollama Server is Running
+Ollama runs in the background automatically. To verify, run:
 ```bash
-pip install -e .
+ollama serve
 ```
+*(By default, Ollama is accessible at `http://localhost:11434`)*
+
+### Step 4: Configure DevMind for Ollama
+Run the DevMind setup wizard:
+```bash
+devmind init
+```
+1. Select option **`[5] 🦙 Ollama`**.
+2. Press Enter to accept the default base URL (`http://localhost:11434`).
+3. Enter the model name you pulled (e.g. `llama3.2` or `qwen2.5-coder:7b`).
+4. DevMind will test the local connection and save your configuration globally.
+
+> 💡 **Zero-Cost Local Embeddings**: DevMind uses local CPU-accelerated `FastEmbed` (`BAAI/bge-small-en-v1.5`) for vector indexing. No embeddings are sent to external APIs!
 
 ---
 
-## CLI Command Reference
+## ⚡ Free Cloud AI Providers (Groq & Google Gemini)
 
-*   **Ingest Codebase**:
-    ```bash
-    devmind remember
-    ```
-*   **Ask a Question**:
-    ```bash
-    devmind ask "Why did we switch to redis for the queue?"
-    ```
-*   **Log an Architectural Decision (ADR)**:
-    ```bash
-    devmind log "Chose FastAPI for the web UI because it supports async routes natively."
-    ```
-*   **Refresh Changed Memory**:
-    ```bash
-    devmind refresh
-    ```
-*   **Forget a Specific File**:
-    ```bash
-    devmind forget --file devmind/web/app.py
-    ```
-*   **Wipe Local Database Cache**:
-    ```bash
-    devmind forget --all
-    ```
-*   **Launch Web Dashboard**:
-    ```bash
-    devmind dashboard --port 8000
-    ```
-*   **Start MCP Server**:
-    ```bash
-    devmind mcp
-    ```
+If you prefer cloud models without needing local GPU/RAM:
+
+* **⚡ Groq (Recommended - Ultra Fast & 100% Free)**:
+  1. Get a free API key at [console.groq.com/keys](https://console.groq.com/keys).
+  2. Run `devmind init` and choose `[1] Groq`.
+* **♊ Google Gemini (Generous Free Tier)**:
+  1. Get a free API key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+  2. Run `devmind init` and choose `[2] Gemini`.
+* **🟣 Anthropic Claude / 🟢 OpenAI / 🌐 OpenRouter**:
+  Run `devmind init` to configure Claude (`claude-3-5-sonnet`), OpenAI (`gpt-4o-mini`, `o3-mini`), or OpenRouter keys.
 
 ---
 
-## Running the Mock Demo Project
+## 🛠️ CLI Command Reference
 
-To test DevMind on a smaller project without polluting your main repo:
-1. Navigate to the demo directory:
-   ```bash
-   cd examples/demo_project
-   ```
-2. Build the memory of the demo:
-   ```bash
-   devmind remember --dir .
-   ```
-3. Query its memory:
-   ```bash
-   devmind ask "What open TODO tasks are left in main.py?"
-   devmind ask "Why do we use SQLite according to our architecture decisions?"
-   ```
+### 🧠 1. Memory & Knowledge Ingestion
+* **`devmind remember`**: Scans files, AST symbols, comments, and git history into local graph-vector memory.
+  ```bash
+  devmind remember                # Fast local mode (0 API calls, instant)
+  devmind remember --incremental  # Only scan changed files in git diff
+  devmind remember --deep         # Run LLM entity extraction
+  ```
+* **`devmind ask "<query>"`**: Ask plain-English questions about codebase architecture.
+  ```bash
+  devmind ask "How does payment retry logic work on webhook timeout?"
+  ```
+* **`devmind chat`**: Start an interactive terminal REPL session to explore code.
+  ```bash
+  devmind chat
+  ```
+* **`devmind log "<decision>"`**: Record an Architectural Decision Record (ADR) into persistent memory.
+  ```bash
+  devmind log "Chose SQLite/LanceDB locally to ensure zero infrastructure overhead."
+  ```
 
 ---
 
-## Claude Code MCP Integration
+### 🔬 2. Code Quality & Health Analysis
+* **`devmind health`**: Scans the codebase for technical debt, complexity hotspots, code smells, dead imports, and test coverage gaps (100% offline).
+  ```bash
+  devmind health                        # Rich terminal dashboard
+  devmind health --output report.md     # Export Markdown report
+  devmind health --threshold 75         # CI quality gate (exit code 1 if score < 75)
+  ```
 
-To connect Claude Code to DevMind's memory, add the server to your Claude MCP config:
+---
 
+### 🗺️ 3. Visual Graphs & Architecture Digests
+* **`devmind graph`**: Launch an interactive browser graph of codebase symbols and relationships.
+  ```bash
+  devmind graph --port 8000
+  ```
+* **`devmind digest`**: Generate a structured Markdown architecture map of classes, functions, and files.
+  ```bash
+  devmind digest --output ARCHITECTURE_MINDMAP.md
+  ```
+* **`devmind dashboard`**: Open the local web management dashboard.
+  ```bash
+  devmind dashboard
+  ```
+
+---
+
+### ⚙️ 4. Configuration & Maintenance
+* **`devmind init` / `devmind config`**: Interactive setup wizard to switch providers or keys.
+* **`devmind refresh`**: Re-scan changed files and refine relationship links in graph memory.
+* **`devmind forget`**: Surgically remove a file or wipe local memory.
+  ```bash
+  devmind forget --file auth/middleware.py   # Delete specific file memory
+  devmind forget --all                      # Wipe local memory databases
+  ```
+
+---
+
+## 🤖 Agentic IDE Integration (Claude Code & Cursor via MCP)
+
+Connect DevMind's persistent memory directly to autonomous agents like **Claude Code**, **Cursor Agent**, or **Windsurf** using the Model Context Protocol:
+
+### Claude Code Setup:
 ```bash
 claude mcp add devmind "devmind mcp"
 ```
 
-Alternatively, configure your project-level `.mcp.json` file in your project root:
+### Cursor / Project `.mcp.json` Setup:
+Create a `.mcp.json` file in your repository root:
 ```json
 {
   "mcpServers": {
@@ -128,9 +170,10 @@ Alternatively, configure your project-level `.mcp.json` file in your project roo
   }
 }
 ```
+*Your AI assistant can now call `query_codebase_memory` and `log_decision_record` automatically instead of burning 50,000+ tokens blindly reading random files!*
 
 ---
 
-## AI Assistant Declaration
+## 📄 License
 
-Per the rules of **The Hangover Part AI Hackathon**, this project declares the use of **Claude** (via the Antigravity IDE agent) as an AI pair programmer.
+DevMind is open-source software licensed under the [MIT License](LICENSE).
