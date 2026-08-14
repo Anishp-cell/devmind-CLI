@@ -796,6 +796,113 @@ def health(
         console.print(f"\n[bold red]❌ Health score {score} is below threshold {threshold}. Exiting with code 1.[/bold red]")
         raise typer.Exit(code=1)
 
+@app.command()
+def onboard(
+    directory: str = typer.Option(
+        ".",
+        "--dir", "-d",
+        help="The directory of the codebase to analyze."
+    ),
+    output: str = typer.Option(
+        "ONBOARDING.md",
+        "--output", "-o",
+        help="Output markdown file name for the onboarding guide."
+    ),
+):
+    """
+    Generate an instant, structured Codebase Onboarding Guide for new developers.
+
+    Detects tech stack, entry points, setup/test commands, top architectural files,
+    git activity, and engineering debt. Outputs ONBOARDING.md and a terminal dashboard.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from devmind.analysis.onboarding import generate_onboarding_report, format_onboarding_markdown
+
+    console = Console()
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+
+    with console.status("[bold cyan]🚀 Analyzing codebase topology for onboarding guide...[/bold cyan]", spinner="dots"):
+        report = generate_onboarding_report(resolved_dir)
+
+    console.print()
+    banner = (
+        f"[bold cyan]🚀 Codebase Onboarding Guide: {report.project_name}[/bold cyan]\n"
+        f"[dim]{report.total_files} files • {report.total_lines:,} lines • Auto-detected architecture[/dim]"
+    )
+    console.print(Panel(banner, border_style="cyan", padding=(0, 2)))
+    console.print()
+
+    # 1. Tech Stack Card
+    stack_lines = []
+    if report.stack.languages:
+        stack_lines.append(f"[bold]Languages:[/bold]       {', '.join(report.stack.languages)}")
+    if report.stack.frameworks:
+        stack_lines.append(f"[bold]Frameworks:[/bold]      {', '.join(report.stack.frameworks)}")
+    if report.stack.package_managers:
+        stack_lines.append(f"[bold]Tooling:[/bold]         {', '.join(report.stack.package_managers)}")
+    if report.stack.databases:
+        stack_lines.append(f"[bold]Storage/DB:[/bold]      {', '.join(report.stack.databases)}")
+    if report.stack.entry_points:
+        stack_lines.append(f"[bold]Entry Points:[/bold]    {', '.join(report.stack.entry_points[:4])}")
+
+    console.print(Panel(
+        "\n".join(stack_lines) if stack_lines else "[dim]Standard environment[/dim]",
+        title="[bold]🏗️  Technology Stack[/bold]",
+        border_style="magenta"
+    ))
+    console.print()
+
+    # 2. Setup Commands
+    cmd_table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    cmd_table.add_column("Action", style="yellow", width=12)
+    cmd_table.add_column("Command", style="bold white")
+
+    if report.commands.install:
+        for c in report.commands.install:
+            cmd_table.add_row("Install", c)
+    if report.commands.run:
+        for c in report.commands.run:
+            cmd_table.add_row("Run", c)
+    if report.commands.test:
+        for c in report.commands.test:
+            cmd_table.add_row("Test", c)
+    if report.commands.lint:
+        for c in report.commands.lint:
+            cmd_table.add_row("Lint", c)
+
+    console.print(Panel(
+        cmd_table if (report.commands.install or report.commands.run or report.commands.test) else "[dim]No explicit scripts found.[/dim]",
+        title="[bold]⚙️  Quickstart Commands[/bold]",
+        border_style="green"
+    ))
+    console.print()
+
+    # 3. Key Architectural Files
+    file_table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    file_table.add_column("File", style="bold white", no_wrap=True)
+    file_table.add_column("Role / Summary", style="dim")
+    file_table.add_column("Imports", justify="right", style="cyan")
+
+    for kf in report.key_files:
+        file_table.add_row(kf.path, kf.role_summary[:65], str(kf.fan_in))
+
+    console.print(Panel(
+        file_table,
+        title="[bold]🗺️  Core Architectural Files (Start Reading Here)[/bold]",
+        border_style="blue"
+    ))
+    console.print()
+
+    # Export Markdown file
+    md_content = format_onboarding_markdown(report)
+    out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(md_content)
+
+    console.print(f"[bold green]✨ Onboarding guide generated at:[/bold green] [cyan]{out_path}[/cyan]\n")
+
 
 if __name__ == "__main__":
     app()
