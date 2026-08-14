@@ -5,6 +5,8 @@ import asyncio
 import os
 import logging
 import warnings
+import pathlib
+from typing import Optional
 
 # Suppress ResourceWarning and DeprecationWarning from aiohttp/asyncio during garbage collection
 warnings.filterwarnings("ignore", category=ResourceWarning)
@@ -430,5 +432,342 @@ def digest(
         
     typer.echo(f"[Success] Architecture digest generated at '{out_path}'.")
 
+@app.command()
+def health(
+    directory: str = typer.Option(
+        ".",
+        "--dir", "-d",
+        help="The directory of the codebase to analyse. Defaults to current directory."
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Write the health report as a Markdown file at this path."
+    ),
+    threshold: Optional[int] = typer.Option(
+        None,
+        "--threshold", "-t",
+        help="Exit with code 1 if the health score is below this value (useful for CI gates)."
+    ),
+):
+    """
+    Scan the codebase and generate a structured health report.
+
+    Analyses cyclomatic complexity, code smells, technical debt tags,
+    dead imports, and test coverage gaps — all offline, zero API calls.
+    Produces a 0-100 health score with grade (A-F).
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.text import Text
+    from rich.columns import Columns
+    from devmind.analysis.health import run_health_analysis
+
+    console = Console()
+
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+
+    # ── Run analysis with spinner ─────────────────────────────────────────────
+    with console.status(
+        "[bold cyan]🔬 Scanning codebase for health issues...[/bold cyan]",
+        spinner="dots"
+    ):
+        report = run_health_analysis(resolved_dir)
+
+    if report.total_files == 0:
+        console.print("[bold red]No files found to analyse.[/bold red]")
+        raise typer.Exit(code=1)
+
+    # ── Helper: severity colour ───────────────────────────────────────────────
+    def sev_icon(count: int, warn_threshold: int = 1, crit_threshold: int = 5) -> str:
+        if count == 0:
+            return "[bold green]✅[/bold green]"
+        if count < crit_threshold:
+            return "[bold yellow]⚠️ [/bold yellow]"
+        return "[bold red]🔴[/bold red]"
+
+    def grade_colour(grade: str) -> str:
+        return {"A": "green", "B": "cyan", "C": "yellow", "D": "orange3", "F": "red"}.get(grade, "white")
+
+    # ── Score bar ─────────────────────────────────────────────────────────────
+    score = report.health_score
+    grade = report.grade
+    bar_filled = int(score / 5)   # 20 blocks total → each = 5 pts
+    bar_empty  = 20 - bar_filled
+    bar_colour = grade_colour(grade)
+    bar_str    = f"[{bar_colour}]{'█' * bar_filled}[/{bar_colour}][dim]{'░' * bar_empty}[/dim]"
+
+    header_text = (
+        f"  [bold]Project:[/bold] [cyan]{report.project_name}[/cyan]  "
+        f"[dim]│[/dim]  [bold]{report.total_files}[/bold] files  "
+        f"[dim]│[/dim]  [bold]{report.total_functions}[/bold] functions  "
+        f"[dim]│[/dim]  [bold]{report.total_classes}[/bold] classes  "
+        f"[dim]│[/dim]  [bold]{report.total_lines:,}[/bold] lines"
+    )
+
+    console.print()
+    console.print(Panel(header_text, title="[bold magenta]🧠 DevMind Codebase Health Report[/bold magenta]", border_style="magenta"))
+    console.print()
+    console.print(
+        f"  Health Score   {bar_str}  "
+        f"[bold {bar_colour}]{score} / 100[/bold {bar_colour}]   "
+        f"Grade: [bold {bar_colour}]{grade}[/bold {bar_colour}]"
+    )
+    console.print()
+
+    # ── Complexity panel ──────────────────────────────────────────────────────
+    hotspots = [fc for fc in report.function_complexities if fc.is_hotspot]
+    avg_cc = report.avg_complexity
+    cc_icon = sev_icon(len(hotspots), 1, 5)
+
+    comp_table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    comp_table.add_column("Function", style="white", no_wrap=True)
+    comp_table.add_column("File", style="dim", no_wrap=True)
+    comp_table.add_column("Line", style="dim", justify="right")
+    comp_table.add_column("CC", style="bold", justify="right")
+
+    for fc in hotspots[:8]:
+        cc_colour = "red" if fc.complexity >= 15 else "yellow"
+        comp_table.add_row(
+            fc.name,
+            fc.file,
+            str(fc.line),
+            f"[{cc_colour}]{fc.complexity}[/{cc_colour}]",
+        )
+
+    top_line = (
+        f"{cc_icon} Avg CC: [bold]{avg_cc:.1f}[/bold]   "
+        f"Hot spots: [bold]{len(hotspots)}[/bold] / {len(report.function_complexities)} functions"
+    )
+    if hotspots:
+        console.print(Panel(
+            Text.from_markup(top_line + "\n") if not hotspots else top_line,
+            title="[bold]🔁 Complexity[/bold]",
+            border_style="cyan",
+        ))
+        console.print(comp_table)
+        console.print()
+    else:
+        console.print(Panel(
+            top_line,
+            title="[bold]🔁 Complexity[/bold]",
+            border_style="green",
+        ))
+        console.print()
+
+    # ── Code smells panel ─────────────────────────────────────────────────────
+    smells = report.code_smells
+    smell_icon = sev_icon(len(smells), 1, 4)
+    god_classes = [s for s in smells if s.kind == "god_class"]
+    long_fns    = [s for s in smells if s.kind == "long_function"]
+    deep_nests  = [s for s in smells if s.kind == "deep_nesting"]
+
+    smell_table = Table(show_header=False, box=None, padding=(0, 1))
+    smell_table.add_column("Icon", width=3)
+    smell_table.add_column("Kind", style="yellow")
+    smell_table.add_column("Name", style="white")
+    smell_table.add_column("Location", style="dim")
+    smell_table.add_column("Detail", style="dim")
+
+    for s in smells[:10]:
+        kind_label = {"god_class": "God Class", "long_function": "Long Function", "deep_nesting": "Deep Nesting"}.get(s.kind, s.kind)
+        smell_table.add_row("⚠️ ", kind_label, s.name, f"{s.file}:L{s.line}", s.detail)
+
+    smell_summary = (
+        f"{smell_icon} "
+        f"[bold]{len(god_classes)}[/bold] god class{'es' if len(god_classes) != 1 else ''}  •  "
+        f"[bold]{len(long_fns)}[/bold] long function{'s' if len(long_fns) != 1 else ''}  •  "
+        f"[bold]{len(deep_nests)}[/bold] deep nest{'s' if len(deep_nests) != 1 else ''}"
+    )
+    border = "yellow" if smells else "green"
+    console.print(Panel(smell_summary, title="[bold]🐛 Code Smells[/bold]", border_style=border))
+    if smells:
+        console.print(smell_table)
+    console.print()
+
+    # ── Tech debt tags panel ──────────────────────────────────────────────────
+    debt = report.debt_tags
+    debt_counts: dict[str, int] = {}
+    for d in debt:
+        debt_counts[d.tag] = debt_counts.get(d.tag, 0) + 1
+
+    debt_icon = sev_icon(len(debt), 3, 10)
+    debt_summary_parts = "  ".join(
+        f"[bold]{count}[/bold] {tag}" for tag, count in sorted(debt_counts.items())
+    ) or "None found"
+
+    debt_table = Table(show_header=False, box=None, padding=(0, 1))
+    debt_table.add_column("Tag", style="bold yellow", width=8)
+    debt_table.add_column("Location", style="dim", no_wrap=True)
+    debt_table.add_column("Text", style="white")
+
+    # Show BUG first, then FIXME, then others
+    priority_order = ["BUG", "FIXME", "HACK", "TODO", "XXX", "DEPRECATED"]
+    sorted_debt = sorted(
+        debt,
+        key=lambda d: (priority_order.index(d.tag) if d.tag in priority_order else 99, d.file, d.line)
+    )
+    for d in sorted_debt[:12]:
+        tag_colour = "red" if d.tag in {"BUG", "FIXME"} else "yellow"
+        debt_table.add_row(
+            f"[{tag_colour}]{d.tag}[/{tag_colour}]",
+            f"{d.file}:L{d.line}",
+            d.text[:70] + ("..." if len(d.text) > 70 else ""),
+        )
+    if len(debt) > 12:
+        debt_table.add_row("", "[dim]...[/dim]", f"[dim]and {len(debt) - 12} more[/dim]")
+
+    border = "red" if len(debt) >= 10 else "yellow" if debt else "green"
+    console.print(Panel(
+        f"{debt_icon} {debt_summary_parts}",
+        title="[bold]📋 Technical Debt Tags[/bold]",
+        border_style=border,
+    ))
+    if debt:
+        console.print(debt_table)
+    console.print()
+
+    # ── Dead imports panel ────────────────────────────────────────────────────
+    dead = report.dead_imports
+    dead_icon = sev_icon(len(dead), 3, 10)
+    dead_table = Table(show_header=False, box=None, padding=(0, 1))
+    dead_table.add_column("Icon", width=3)
+    dead_table.add_column("Import", style="white")
+    dead_table.add_column("Location", style="dim")
+
+    for di in dead[:10]:
+        dead_table.add_row("⚠️ ", di.import_name, f"{di.file}:L{di.line}")
+    if len(dead) > 10:
+        dead_table.add_row("", "[dim]...[/dim]", f"[dim]and {len(dead) - 10} more[/dim]")
+
+    border = "yellow" if dead else "green"
+    console.print(Panel(
+        f"{dead_icon} [bold]{len(dead)}[/bold] potentially unused import{'s' if len(dead) != 1 else ''} detected  [dim](heuristic — verify before removing)[/dim]",
+        title="[bold]🗑️  Dead Imports[/bold]",
+        border_style=border,
+    ))
+    if dead:
+        console.print(dead_table)
+    console.print()
+
+    # ── Test coverage panel ───────────────────────────────────────────────────
+    from devmind.analysis.health import SOURCE_EXTENSIONS
+    source_only = [f for f in report.source_files if pathlib.Path(f).suffix.lower() in SOURCE_EXTENSIONS]
+    covered_count = len(source_only) - len(report.uncovered_files)
+    total_source = max(len(source_only), 1)
+    coverage_pct = int(covered_count / total_source * 100)
+
+    cov_icon = "✅" if coverage_pct >= 80 else "⚠️ " if coverage_pct >= 50 else "🔴"
+    cov_bar_filled = int(coverage_pct / 5)
+    cov_bar = f"[cyan]{'█' * cov_bar_filled}[/cyan][dim]{'░' * (20 - cov_bar_filled)}[/dim]"
+
+    cov_table = Table(show_header=False, box=None, padding=(0, 1))
+    cov_table.add_column("Icon", width=3)
+    cov_table.add_column("File", style="white")
+
+    for uf in report.uncovered_files[:8]:
+        cov_table.add_row("🔴", uf)
+    if len(report.uncovered_files) > 8:
+        cov_table.add_row("", f"[dim]... and {len(report.uncovered_files) - 8} more[/dim]")
+
+    border = "green" if coverage_pct >= 80 else "yellow" if coverage_pct >= 50 else "red"
+    console.print(Panel(
+        f"{cov_icon} {cov_bar}  [bold]{covered_count}[/bold] / [bold]{total_source}[/bold] source files covered   [bold]{coverage_pct}%[/bold]",
+        title="[bold]🧪 Test Coverage[/bold]",
+        border_style=border,
+    ))
+    if report.uncovered_files:
+        console.print(cov_table)
+    console.print()
+
+    # ── Final verdict ─────────────────────────────────────────────────────────
+    gc = grade_colour(grade)
+    if score >= 85:
+        verdict = f"[bold green]✅ Score {score}/100 — Excellent codebase health![/bold green]"
+    elif score >= 70:
+        verdict = f"[bold cyan]✅ Score {score}/100 — Healthy codebase with minor issues.[/bold cyan]"
+    elif score >= 55:
+        verdict = f"[bold yellow]⚠️  Score {score}/100 — Codebase needs attention.[/bold yellow]"
+    elif score >= 40:
+        verdict = f"[bold orange3]⚠️  Score {score}/100 — Significant technical debt present.[/bold orange3]"
+    else:
+        verdict = f"[bold red]🔴 Score {score}/100 — Critical health issues detected.[/bold red]"
+
+    console.print(Panel(verdict, border_style=gc, padding=(0, 2)))
+
+    # ── Optional Markdown output ──────────────────────────────────────────────
+    if output:
+        import pathlib as _pl
+        md_lines = [
+            f"# DevMind Codebase Health Report: {report.project_name}",
+            "",
+            f"**Health Score: {score}/100  |  Grade: {grade}**",
+            "",
+            f"| Metric | Value |",
+            f"|---|---|",
+            f"| Total Files | {report.total_files} |",
+            f"| Total Functions | {report.total_functions} |",
+            f"| Total Classes | {report.total_classes} |",
+            f"| Total Lines | {report.total_lines:,} |",
+            f"| Avg Complexity (CC) | {report.avg_complexity:.1f} |",
+            f"| Complexity Hotspots | {len(hotspots)} |",
+            f"| Code Smells | {len(smells)} |",
+            f"| Technical Debt Tags | {len(debt)} |",
+            f"| Dead Imports | {len(dead)} |",
+            f"| Test Coverage | {coverage_pct}% ({covered_count}/{total_source}) |",
+            "",
+            "## Complexity Hotspots",
+            "",
+        ]
+        if hotspots:
+            md_lines.append("| Function | File | Line | CC |")
+            md_lines.append("|---|---|---|---|")
+            for fc in hotspots[:20]:
+                md_lines.append(f"| `{fc.name}` | `{fc.file}` | {fc.line} | {fc.complexity} |")
+        else:
+            md_lines.append("*No complexity hotspots found.*")
+
+        md_lines += ["", "## Code Smells", ""]
+        if smells:
+            md_lines.append("| Kind | Name | File | Line | Detail |")
+            md_lines.append("|---|---|---|---|---|")
+            for s in smells:
+                kind_label = {"god_class": "God Class", "long_function": "Long Function", "deep_nesting": "Deep Nesting"}.get(s.kind, s.kind)
+                md_lines.append(f"| {kind_label} | `{s.name}` | `{s.file}` | {s.line} | {s.detail} |")
+        else:
+            md_lines.append("*No code smells found.*")
+
+        md_lines += ["", "## Technical Debt Tags", ""]
+        if debt:
+            md_lines.append("| Tag | File | Line | Text |")
+            md_lines.append("|---|---|---|---|")
+            for d in sorted_debt[:50]:
+                md_lines.append(f"| `{d.tag}` | `{d.file}` | {d.line} | {d.text} |")
+        else:
+            md_lines.append("*No debt tags found.*")
+
+        md_lines += ["", "## Uncovered Files (No Tests Found)", ""]
+        if report.uncovered_files:
+            for uf in report.uncovered_files:
+                md_lines.append(f"- `{uf}`")
+        else:
+            md_lines.append("*All source files have corresponding test files.*")
+
+        md_lines += ["", "---", "*Generated by DevMind CLI (`devmind health`)*"]
+
+        out_path = _pl.Path(output) if _pl.Path(output).is_absolute() else _pl.Path(resolved_dir) / output
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(md_lines))
+        console.print(f"\n[dim]📄 Report also written to: [cyan]{out_path}[/cyan][/dim]")
+
+    # ── CI threshold gate ─────────────────────────────────────────────────────
+    if threshold is not None and score < threshold:
+        console.print(f"\n[bold red]❌ Health score {score} is below threshold {threshold}. Exiting with code 1.[/bold red]")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
+
