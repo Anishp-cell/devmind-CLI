@@ -297,8 +297,7 @@ def initialize_cognee():
     llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
     embedding_provider = os.getenv("EMBEDDING_PROVIDER", "fastembed").lower()
     
-    # Cognee does not natively support "groq" in its LLMProvider enum.
-    # We map "groq" to the "custom" provider utilizing Groq's OpenAI-compatible endpoint.
+    # Cognee LLM Provider Configuration
     if llm_provider == "groq":
         groq_key, endpoint, model = get_random_api_key()
         os.environ["LLM_PROVIDER"] = "custom"
@@ -311,13 +310,13 @@ def initialize_cognee():
         cognee.config.set_llm_api_key(groq_key)
         cognee.config.set_llm_model(model)
         if not groq_key:
-            logger.warning("[Warning] No Groq API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY to query or ingest.")
+            logger.warning("[Warning] No Groq API keys found. Please run 'devmind init' to configure.")
+            
     elif llm_provider == "gemini":
         gemini_key = get_random_gemini_key()
         os.environ["LLM_PROVIDER"] = "custom"
         os.environ["LLM_ENDPOINT"] = "https://generativelanguage.googleapis.com/v1beta/openai/"
         os.environ["LLM_API_KEY"] = gemini_key
-        # Force litellm to use standard OpenAI provider for Gemini model to bypass vertex_ai routing for GCP keys starting with AQ.
         os.environ["LLM_ARGS"] = '{"custom_llm_provider": "openai"}'
         
         cognee.config.set_llm_provider("custom")
@@ -328,18 +327,52 @@ def initialize_cognee():
             model = f"openai/{model}"
         cognee.config.set_llm_model(model)
         if not gemini_key:
-            logger.warning("[Warning] No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY to query or ingest.")
+            logger.warning("[Warning] No Gemini API keys found. Please run 'devmind init' to configure.")
         
-        # Install per-call key rotation if multiple keys are available
         if len(_GEMINI_API_KEYS) > 1:
             _install_litellm_key_rotation(_GEMINI_API_KEYS)
-        else:
-            logger.warning("Only 1 Gemini key found. Add more keys to GEMINI_API_KEYS for rate-limit resilience.")
+            
+    elif llm_provider == "anthropic":
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("LLM_API_KEY", "")
+        model = os.getenv("LLM_MODEL", "anthropic/claude-3-5-sonnet-20241022")
+        os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+        os.environ["LLM_API_KEY"] = anthropic_key
+        cognee.config.set_llm_provider("anthropic")
+        cognee.config.set_llm_api_key(anthropic_key)
+        cognee.config.set_llm_model(model)
+        if not anthropic_key:
+            logger.warning("[Warning] ANTHROPIC_API_KEY is not set. Please run 'devmind init' to configure.")
+            
+    elif llm_provider == "openai":
+        openai_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY", "")
+        model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+        os.environ["OPENAI_API_KEY"] = openai_key
+        os.environ["LLM_API_KEY"] = openai_key
+        cognee.config.set_llm_provider("openai")
+        cognee.config.set_llm_api_key(openai_key)
+        cognee.config.set_llm_model(model)
+        if not openai_key:
+            logger.warning("[Warning] OPENAI_API_KEY is not set. Please run 'devmind init' to configure.")
+
+    elif llm_provider == "openrouter":
+        openrouter_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY", "")
+        endpoint = "https://openrouter.ai/api/v1"
+        model = os.getenv("LLM_MODEL", "openrouter/meta-llama/llama-3.3-70b-instruct")
+        os.environ["LLM_PROVIDER"] = "custom"
+        os.environ["LLM_ENDPOINT"] = endpoint
+        os.environ["LLM_API_KEY"] = openrouter_key
+        cognee.config.set_llm_provider("custom")
+        cognee.config.set_llm_endpoint(endpoint)
+        cognee.config.set_llm_api_key(openrouter_key)
+        cognee.config.set_llm_model(model)
+        if not openrouter_key:
+            logger.warning("[Warning] OPENROUTER_API_KEY is not set. Please run 'devmind init' to configure.")
+
     elif llm_provider == "ollama":
-        ollama_endpoint = os.getenv("OLLAMA_ENDPOINT") or os.getenv("OLLAMA_HOST", "http://localhost:11434/v1")
+        ollama_endpoint = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_ENDPOINT") or os.getenv("OLLAMA_HOST", "http://localhost:11434")
         if not ollama_endpoint.endswith("/v1") and not ollama_endpoint.endswith("/v1/"):
             ollama_endpoint = f"{ollama_endpoint.rstrip('/')}/v1"
-        model = os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL", "openai/llama3.2")
+        model = os.getenv("OLLAMA_MODEL") or os.getenv("LLM_MODEL", "llama3.2")
         if not model.startswith("openai/"):
             model = f"openai/{model}"
             
@@ -354,7 +387,7 @@ def initialize_cognee():
         logger.info(f"Ollama local LLM configured at {ollama_endpoint} (model: {model})")
     else:
         api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY", "")
-        endpoint = os.getenv("LLM_ENDPOINT")
+        endpoint = os.getenv("LLM_ENDPOINT") or os.getenv("OPENAI_BASE_URL")
         model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
         
         cognee.config.set_llm_provider(llm_provider)

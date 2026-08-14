@@ -181,10 +181,31 @@ def remember(
     By default, uses fast local-only mode (0 API calls, instant).
     Use --deep to enable LLM-powered knowledge graph extraction.
     """
+    if deep:
+        from devmind.config_wizard import ensure_configured
+        if not ensure_configured():
+            return
+
     initialize_cognee()
     resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
     run_async(remember_pipeline(resolved_dir, incremental=incremental, deep=deep))
     typer.echo("[Success] Codebase memory ingestion completed.")
+
+@app.command()
+def init():
+    """
+    Interactive setup wizard to configure AI model provider (Groq, Gemini, Claude, OpenAI, Ollama, OpenRouter).
+    """
+    from devmind.config_wizard import run_setup_wizard
+    run_setup_wizard()
+
+@app.command()
+def config():
+    """
+    View or reconfigure your active AI model provider and credentials.
+    """
+    from devmind.config_wizard import run_setup_wizard
+    run_setup_wizard()
 
 @app.command()
 def ask(
@@ -193,6 +214,10 @@ def ask(
     """
     Ask a question about the ingested codebase memory in plain English.
     """
+    from devmind.config_wizard import ensure_configured
+    if not ensure_configured():
+        return
+
     initialize_cognee()
     from rich.console import Console
     from rich.markdown import Markdown
@@ -214,6 +239,10 @@ def chat():
     """
     Start an interactive DevMind terminal chat session to explore your codebase.
     """
+    from devmind.config_wizard import ensure_configured
+    if not ensure_configured():
+        return
+
     initialize_cognee()
     
     from rich.console import Console
