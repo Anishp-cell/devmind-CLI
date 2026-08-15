@@ -903,6 +903,121 @@ def onboard(
 
     console.print(f"[bold green]✨ Onboarding guide generated at:[/bold green] [cyan]{out_path}[/cyan]\n")
 
+@app.command()
+def impact(
+    target: str = typer.Argument(
+        ...,
+        help="The function, class, or file path to analyze blast radius for."
+    ),
+    directory: str = typer.Option(
+        ".",
+        "--dir", "-d",
+        help="The directory of the codebase to analyze."
+    ),
+    depth: int = typer.Option(
+        3,
+        "--depth",
+        help="Maximum downstream call graph hops to traverse."
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Optional markdown file path to write the blast radius report to."
+    ),
+):
+    """
+    Analyze blast radius and downstream dependency impact before modifying code.
+
+    Traverses AST call graphs and import networks to reveal direct callers,
+    transitive ripples, impacted test suites, and calculates a risk severity score.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.tree import Tree
+    from devmind.analysis.impact import run_impact_analysis, format_impact_markdown
+
+    console = Console()
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+
+    with console.status(f"[bold cyan]💥 Calculating blast radius for '[white]{target}[/white]'...[/bold cyan]", spinner="dots"):
+        report = run_impact_analysis(resolved_dir, target, depth=depth)
+
+    console.print()
+    sev_colour = {"CRITICAL": "red", "MODERATE": "yellow", "LOW": "green"}.get(report.severity, "white")
+    sev_icon = {"CRITICAL": "🔴", "MODERATE": "⚠️ ", "LOW": "🟢"}.get(report.severity, "")
+
+    loc_str = f" in [cyan]{report.target_file}[/cyan]" if report.target_file else ""
+    if report.target_line:
+        loc_str += f":L{report.target_line}"
+
+    target_header = (
+        f"  [bold]Target:[/bold] [cyan]{report.target_symbol}[/cyan] ({report.target_type}){loc_str}\n"
+        f"  [bold]Blast Radius Severity:[/bold] [{sev_colour}]{sev_icon} {report.severity}[/{sev_colour}] (Risk Score: [{sev_colour}]{report.risk_score}/100[/{sev_colour}])\n"
+        f"  [bold]Impact:[/bold] [bold]{len(report.direct_callers)}[/bold] direct callers • "
+        f"[bold]{len(report.transitive_callers)}[/bold] transitive downstream • "
+        f"[bold]{len(report.impacted_files)}[/bold] files • "
+        f"[bold]{len(report.impacted_tests)}[/bold] test suites"
+    )
+    console.print(Panel(target_header, title="[bold magenta]💥 DevMind Blast Radius Analysis[/bold magenta]", border_style=sev_colour))
+    console.print()
+
+    # 1. Direct Callers Table
+    if report.direct_callers:
+        direct_table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+        direct_table.add_column("Location", style="white", no_wrap=True)
+        direct_table.add_column("Enclosing Scope", style="yellow")
+        direct_table.add_column("Type", style="dim")
+        direct_table.add_column("Code Snippet", style="dim")
+
+        for c in report.direct_callers[:10]:
+            direct_table.add_row(
+                f"{c.file_path}:L{c.line_number}",
+                c.enclosing_symbol,
+                c.call_type,
+                c.snippet[:50] + ("..." if len(c.snippet) > 50 else "")
+            )
+        console.print(Panel(direct_table, title=f"[bold]🎯 Direct Callers (Depth 1 — {len(report.direct_callers)} sites)[/bold]", border_style="cyan"))
+        console.print()
+    else:
+        console.print(Panel("[dim]No direct internal callers detected in codebase.[/dim]", title="[bold]🎯 Direct Callers[/bold]", border_style="green"))
+        console.print()
+
+    # 2. Transitive Tree
+    if report.transitive_callers:
+        tree = Tree(f"[bold cyan]{report.target_symbol}[/bold cyan] [dim](target)[/dim]")
+        for tc in report.transitive_callers[:12]:
+            tree.add(f"[dim]Hop {tc.depth} ➔[/dim] [white]{tc.file_path}:L{tc.line_number}[/white] in [yellow]{tc.enclosing_symbol}()[/yellow]")
+        console.print(Panel(tree, title=f"[bold]🌊 Downstream Transitive Ripple ({len(report.transitive_callers)} downstream nodes)[/bold]", border_style="yellow"))
+        console.print()
+
+    # 3. Impacted Tests Checklist
+    if report.impacted_tests:
+        test_table = Table(show_header=False, box=None, padding=(0, 1))
+        test_table.add_column("Icon", width=3)
+        test_table.add_column("Test Suite", style="bold red")
+        for t in report.impacted_tests:
+            test_table.add_row("🔴", t)
+        console.print(Panel(test_table, title="[bold]🧪 Impacted Test Suites (MUST RUN BEFORE COMMITTING)[/bold]", border_style="red"))
+        console.print()
+    else:
+        console.print(Panel("[dim]No direct test suites exercise this symbol.[/dim]", title="[bold]🧪 Impacted Test Suites[/bold]", border_style="dim"))
+        console.print()
+
+    # 4. Recommended Actions
+    if report.recommended_actions:
+        rec_text = "\n".join([f"• {r}" for r in report.recommended_actions])
+        console.print(Panel(rec_text, title="[bold]💡 Recommended Actions[/bold]", border_style=sev_colour))
+        console.print()
+
+    # Export Markdown if requested
+    if output:
+        md_content = format_impact_markdown(report)
+        out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+        console.print(f"[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
+
 
 if __name__ == "__main__":
     app()
