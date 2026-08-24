@@ -1019,6 +1019,81 @@ def impact(
         console.print(f"[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
 
 
+@app.command()
+def drift(
+    directory: str = typer.Option(
+        ".",
+        "--dir", "-d",
+        help="The directory of the codebase to analyze."
+    ),
+    days: int = typer.Option(
+        30,
+        "--days",
+        help="Number of days of git history to analyze for churn."
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Optional path to export the report as markdown (e.g. DRIFT.md)."
+    )
+):
+    """
+    Detect architecture drift: circular imports, layer violations, and
+    churn/complexity hotspots. Runs 100% offline (no API calls).
+    """
+    from devmind.analysis.drift import run_drift_analysis, render_drift_terminal, format_drift_markdown
+    from rich.console import Console
+
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+    console = Console()
+
+    with console.status("[bold cyan]Scanning for architecture drift and churn hotspots...[/bold cyan]", spinner="dots"):
+        report = run_drift_analysis(resolved_dir, days=days)
+
+    render_drift_terminal(report, console=console)
+
+    if output:
+        out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(format_drift_markdown(report))
+        console.print(f"\n[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
+
+
+@app.command()
+def blame(
+    file_path: str = typer.Argument(..., help="The relative path of the file to analyze."),
+    expert: bool = typer.Option(
+        False,
+        "--expert",
+        help="Only show the primary domain expert for this file."
+    ),
+    func_name: Optional[str] = typer.Option(
+        None,
+        "--func",
+        help="Scope ownership and history to a specific function/method name."
+    )
+):
+    """
+    Semantic & architectural git blame: code ownership, key commits,
+    collision risk, and related Architecture Decision Records.
+    """
+    from devmind.analysis.blame import generate_blame_report, render_blame_terminal
+    from rich.console import Console
+
+    root_dir = get_project_root(os.path.dirname(os.path.abspath(file_path)) or ".")
+    relative_path = os.path.relpath(os.path.abspath(file_path), root_dir)
+
+    if not os.path.exists(os.path.join(root_dir, relative_path)):
+        typer.echo(f"[Error] File not found: {file_path}")
+        raise typer.Exit(code=1)
+
+    console = Console()
+    with console.status(f"[bold cyan]Analyzing semantic blame for '[white]{relative_path}[/white]'...[/bold cyan]", spinner="dots"):
+        report = run_async(generate_blame_report(relative_path, root_dir, func_name=func_name))
+
+    render_blame_terminal(report, console=console, expert_only=expert)
+
+
 if __name__ == "__main__":
     app()
 
