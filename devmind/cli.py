@@ -282,6 +282,42 @@ def dashboard(
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
 
 @app.command()
+def blame(
+    file_path: str = typer.Argument(..., help="The relative path of the file to analyze."),
+    expert: bool = typer.Option(
+        False,
+        "--expert",
+        help="Only show the primary domain expert for this file."
+    ),
+    func_name: str = typer.Option(
+        None,
+        "--func",
+        help="Scope ownership and history to a specific function/method name."
+    )
+):
+    """
+    Semantic & architectural git blame: code ownership, key commits,
+    collision risk, and related Architecture Decision Records.
+    """
+    from devmind.analysis.blame import generate_blame_report, render_blame_terminal
+    from rich.console import Console
+
+    root_dir = get_project_root(os.path.dirname(os.path.abspath(file_path)) or ".")
+    relative_path = os.path.relpath(os.path.abspath(file_path), root_dir)
+
+    if not os.path.exists(os.path.join(root_dir, relative_path)):
+        typer.echo(f"[Error] File not found: {file_path}")
+        raise typer.Exit(code=1)
+
+    initialize_cognee()
+
+    console = Console()
+    with console.status("[bold cyan]Analyzing semantic blame...[/bold cyan]", spinner="dots"):
+        report = run_async(generate_blame_report(relative_path, root_dir, func_name=func_name))
+
+    render_blame_terminal(report, console=console, expert_only=expert)
+
+@app.command()
 def mcp():
     """
     Start the DevMind MCP server for integration with Claude Code.
