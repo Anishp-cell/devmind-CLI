@@ -282,6 +282,45 @@ def dashboard(
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
 
 @app.command()
+def drift(
+    directory: str = typer.Option(
+        ".",
+        "--dir", "-d",
+        help="The directory of the codebase to analyze."
+    ),
+    days: int = typer.Option(
+        30,
+        "--days",
+        help="Number of days of git history to analyze for churn."
+    ),
+    output: str = typer.Option(
+        None,
+        "--output", "-o",
+        help="Optional path to export the report as markdown (e.g. DRIFT.md)."
+    )
+):
+    """
+    Detect architecture drift: circular imports, layer violations, and
+    churn/complexity hotspots. Runs 100% offline (no API calls).
+    """
+    from devmind.analysis.drift import run_drift_analysis, render_drift_terminal, format_drift_markdown
+    from rich.console import Console
+
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+
+    console = Console()
+    with console.status("[bold cyan]Analyzing architecture drift...[/bold cyan]", spinner="dots"):
+        report = run_drift_analysis(resolved_dir, days=days)
+
+    render_drift_terminal(report, console=console)
+
+    if output:
+        markdown = format_drift_markdown(report)
+        with open(output, "w", encoding="utf-8") as f:
+            f.write(markdown)
+        typer.echo(f"\n[Success] Drift report exported to '{output}'.")
+
+@app.command()
 def mcp():
     """
     Start the DevMind MCP server for integration with Claude Code.
