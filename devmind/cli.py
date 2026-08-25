@@ -1094,6 +1094,97 @@ def blame(
     render_blame_terminal(report, console=console, expert_only=expert)
 
 
+@app.command()
+def secure(
+    directory: str = typer.Option(
+        ".",
+        "--dir", "-d",
+        help="The directory of the codebase to scan for security vulnerabilities."
+    ),
+    severity: Optional[str] = typer.Option(
+        None,
+        "--severity", "-s",
+        help="Filter findings by minimum severity: 'critical', 'high', 'medium', 'low'."
+    ),
+    category: Optional[str] = typer.Option(
+        None,
+        "--category", "-c",
+        help="Filter findings by category keyword (e.g. 'secret', 'injection', 'sink')."
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Optional path to export the report as markdown (e.g. SECURITY.md)."
+    )
+):
+    """
+    Offline Security & Penetration Scanner: hardcoded secrets, dangerous sinks (eval/exec/subprocess),
+    injection risks (SQLi/SSRF/Path Traversal), cryptographic weaknesses, and CVEs.
+    """
+    from devmind.analysis.secure import run_security_analysis, format_secure_markdown
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+    console = Console()
+
+    with console.status("[bold cyan]Running offline penetration & security audit...[/bold cyan]", spinner="dots"):
+        report = run_security_analysis(resolved_dir, severity=severity, category=category)
+
+    # 1. Header Banner
+    grade_color = "green" if report.risk_grade in ("A", "B") else ("yellow" if report.risk_grade == "C" else "red")
+    summary_text = (
+        f"[bold]Project:[/bold] {os.path.basename(resolved_dir)}  │  "
+        f"[bold]Files Scanned:[/bold] {report.files_scanned}  │  "
+        f"[bold]Security Grade:[/bold] [{grade_color} bold]{report.risk_grade} ({report.risk_score}/100)[/{grade_color} bold]\n"
+        f"[bold]Vulnerabilities:[/bold] "
+        f"[red bold]🔴 {report.critical_count} Critical[/red bold]  •  "
+        f"[yellow bold]🟠 {report.high_count} High[/yellow bold]  •  "
+        f"[blue]🟡 {report.medium_count} Medium[/blue]  •  "
+        f"[dim]🔵 {report.low_count} Low[/dim]"
+    )
+    console.print()
+    console.print(Panel.fit(summary_text, title="🔒 DevMind Security & Penetration Audit", border_style=grade_color))
+    console.print()
+
+    # 2. Findings Table / Cards
+    if not report.findings:
+        console.print(Panel("✅ [bold green]Clean Audit:[/bold green] No security vulnerabilities or hardcoded secrets detected.", title="🛡️ Status", border_style="green"))
+        console.print()
+    else:
+        table = Table(title=f"🚨 Detected Vulnerabilities ({len(report.findings)} items)", border_style="red", show_lines=True)
+        table.add_column("Sev", justify="center", width=8)
+        table.add_column("Rule & Title", style="bold white", width=28)
+        table.add_column("Location", style="cyan", width=22)
+        table.add_column("Risk & Remediation", width=42)
+
+        for f in report.findings[:25]:  # show top 25 findings
+            if f.severity == "CRITICAL":
+                sev_styled = "[red bold]CRITICAL[/red bold]"
+            elif f.severity == "HIGH":
+                sev_styled = "[yellow bold]HIGH[/yellow bold]"
+            elif f.severity == "MEDIUM":
+                sev_styled = "[blue]MEDIUM[/blue]"
+            else:
+                sev_styled = "[dim]LOW[/dim]"
+
+            loc = f"{f.file_path}:L{f.line_number}"
+            details = f"[dim]{f.owasp_category}[/dim]\n[bold]{f.exploit_scenario}[/bold]\n💡 [green]{f.remediation}[/green]"
+            table.add_row(sev_styled, f"[bold]{f.title}[/bold]\n[dim]{f.id}[/dim]", loc, details)
+
+        console.print(table)
+        console.print()
+
+    # 3. Export Markdown if requested
+    if output:
+        out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(format_secure_markdown(report))
+        console.print(f"[dim]📄 Security audit written to: [cyan]{out_path}[/cyan][/dim]\n")
+
+
 if __name__ == "__main__":
     app()
 
