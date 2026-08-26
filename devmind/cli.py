@@ -20,6 +20,11 @@ from devmind.memory import initialize_cognee, remember_content, recall_query, im
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history, get_changed_files_git_diff
 from devmind.ingestion.comment_extractor import get_codebase_comments
+from devmind.version_checker import show_update_notification
+import atexit
+
+# Register background version update checker to notify user upon exit if an update is available
+atexit.register(show_update_notification)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
