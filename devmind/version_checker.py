@@ -87,11 +87,20 @@ def fetch_latest_version_from_pypi(timeout: float = 0.8) -> Optional[str]:
                 latest_ver = payload.get("info", {}).get("version")
                 if latest_ver:
                     cache_path = get_cache_file_path()
-                    with open(cache_path, "w", encoding="utf-8") as f:
-                        json.dump({
-                            "last_checked": time.time(),
-                            "latest_version": latest_ver
-                        }, f)
+                    # Write to a temp file then atomically rename, so two
+                    # concurrent `devmind` processes racing to refresh an
+                    # expired cache can't interleave and corrupt the JSON.
+                    tmp_path = cache_path.with_suffix(f".tmp{os.getpid()}")
+                    try:
+                        with open(tmp_path, "w", encoding="utf-8") as f:
+                            json.dump({
+                                "last_checked": time.time(),
+                                "latest_version": latest_ver
+                            }, f)
+                        os.replace(tmp_path, cache_path)
+                    finally:
+                        if tmp_path.exists():
+                            tmp_path.unlink(missing_ok=True)
                     return latest_ver
     except Exception:
         # Fail silently if offline or timeout

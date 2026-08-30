@@ -46,9 +46,20 @@ data_path = os.path.join(project_root, ".cognee_data")
 # datasets so ADRs are cross-searchable within the project's memory namespace.
 ADR_DATASET_NAME = "devmind_adr_records"
 
-os.makedirs(system_path, exist_ok=True)
-os.makedirs(os.path.join(system_path, "databases"), exist_ok=True)
-os.makedirs(data_path, exist_ok=True)
+# Best-effort at import time — a read-only filesystem (locked-down CI runner,
+# read-only Docker mount) must not crash `import devmind.memory` itself, since
+# every command (including `devmind doctor`, which should be able to diagnose
+# exactly this) imports it. Failures surface clearly once a command actually
+# needs to write (see initialize_cognee()).
+_STORAGE_WRITABLE = True
+_STORAGE_ERROR: Exception | None = None
+try:
+    os.makedirs(system_path, exist_ok=True)
+    os.makedirs(os.path.join(system_path, "databases"), exist_ok=True)
+    os.makedirs(data_path, exist_ok=True)
+except OSError as _storage_exc:
+    _STORAGE_WRITABLE = False
+    _STORAGE_ERROR = _storage_exc
 
 # Set environment variables for Cognee root paths
 os.environ["SYSTEM_ROOT_DIRECTORY"] = system_path
@@ -97,6 +108,12 @@ def mark_key_cooldown(api_key: str, cooldown_seconds: int = 600):
 def get_active_keys(keys_list: list[str]) -> list[str]:
     """Returns list of keys that are not currently in a cooldown window."""
     now = time.time()
+    # Opportunistically drop expired cooldown entries so the dict doesn't
+    # grow unbounded over the lifetime of a long-running process.
+    expired = [k for k, expiry in _KEY_COOLDOWNS.items() if now > expiry]
+    for k in expired:
+        del _KEY_COOLDOWNS[k]
+
     active = [k for k in keys_list if k not in _KEY_COOLDOWNS or now > _KEY_COOLDOWNS[k]]
     return active if active else keys_list  # fallback to all if all are in cooldown
 
@@ -143,6 +160,26 @@ def _install_litellm_key_rotation(keys: list):
     
     litellm.acompletion = _rotating_acompletion
     logger.info(f"Installed litellm key rotation with {len(keys)} keys (interval: {_MIN_CALL_INTERVAL}s)")
+
+def dataset_name_for_project(directory: str) -> str:
+    """
+    Derives a Cognee-safe dataset name from a project directory. Cognee's
+    dataset names are used as identifiers in the relational/graph stores, so
+    non-ASCII folder names (e.g. Unicode, emoji) are sanitized down to
+    alphanumerics/underscores instead of being passed through as-is, with a
+    stable short hash appended if sanitization would otherwise collapse the
+    whole name away (e.g. a folder named entirely in CJK characters).
+    """
+    import re
+    import hashlib
+
+    folder_name = os.path.basename(os.path.abspath(directory)).lower().replace("-", "_").replace(" ", "_")
+    safe_name = re.sub(r"[^a-z0-9_]", "_", folder_name)
+    safe_name = re.sub(r"_+", "_", safe_name).strip("_")
+    if not safe_name:
+        safe_name = "project_" + hashlib.sha1(folder_name.encode("utf-8")).hexdigest()[:8]
+    return f"devmind_{safe_name}"
+
 
 def _get_global_config_path() -> pathlib.Path:
     """
@@ -267,12 +304,19 @@ def initialize_cognee():
     """
     import warnings
     import logging
-    import structlog
-    
+
+    if not _STORAGE_WRITABLE:
+        raise RuntimeError(
+            f"Cannot write to '{system_path}' or '{data_path}' — the filesystem "
+            f"appears to be read-only ({_STORAGE_ERROR}). DevMind needs write access "
+            "to this project directory to store its memory index. Run 'devmind doctor' "
+            "for details."
+        )
+
     # Suppress all python warnings globally (ResourceWarning, RuntimeWarning, DeprecationWarning)
     warnings.filterwarnings("ignore")
     warnings.filterwarnings("ignore", module="aiohttp")
-    
+
     # Suppress verbose warning/info/error logs and structlog traceback dumps from Cognee
     logging.getLogger("cognee").setLevel(logging.CRITICAL)
     logging.getLogger("aiohttp").setLevel(logging.CRITICAL)
@@ -280,8 +324,11 @@ def initialize_cognee():
     logging.getLogger("instructor").setLevel(logging.CRITICAL)
     
     try:
+        import structlog
         structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.CRITICAL))
     except Exception:
+        # structlog is a transitive dependency of cognee, not a direct one —
+        # its absence should only mean noisier logs, never a crash.
         pass
 
     load_dotenv(find_dotenv(usecwd=True))
@@ -479,7 +526,7 @@ async def remember_content(content: str | list[str], dataset_name: str, deep: bo
         return True
     except Exception as e:
         logger.error(f"Error during ingestion for '{dataset_name}': {e}")
-        return True
+        return False
 
 
 async def _fast_cognify(dataset_name: str):
@@ -592,8 +639,7 @@ async def recall_query(query: str) -> str:
 
         # Target only the active project directory's unified dataset
         current_dir = get_project_root()
-        folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
-        target_dataset = f"devmind_{folder_name}"
+        target_dataset = dataset_name_for_project(current_dir)
 
         # Safe query guard: if this project has never been indexed, fail fast
         # with a friendly hint instead of surfacing a raw SQLAlchemy/LanceDB
@@ -604,7 +650,9 @@ async def recall_query(query: str) -> str:
 
         from cognee.modules.search.types import SearchType
         query_type = SearchType.RAG_COMPLETION
-        top_k = int(os.getenv("DEVMIND_RECALL_TOP_K", "3"))
+        # Cap top_k so a misconfigured DEVMIND_RECALL_TOP_K can't dump an
+        # unbounded wall of text into the terminal.
+        top_k = max(1, min(int(os.getenv("DEVMIND_RECALL_TOP_K", "3")), 20))
 
         logger.info(f"Searching memory dataset '{target_dataset}' (top_k={top_k})...")
         results = None

@@ -8,6 +8,24 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
+New here? See [GETTING_STARTED.md](GETTING_STARTED.md) for a full walkthrough, or [CHANGELOG.md](CHANGELOG.md) for recent changes.
+
+---
+
+## ✨ Offline Intelligence Commands (Zero API Calls)
+
+Beyond persistent memory, DevMind ships a full offline static-analysis toolkit — no LLM, no API key, no network required:
+
+| Command | What it does |
+|---|---|
+| `devmind doctor` | Diagnoses your environment: Python version, git, AI provider connectivity, local memory integrity, FastEmbed readiness |
+| `devmind health` | Complexity hotspots, code smells, tech-debt tags, dead imports, test-coverage gaps — 0-100 score with CI gate |
+| `devmind onboard` | Instant onboarding guide: tech stack, setup/run/test commands, core architectural files |
+| `devmind impact <target>` | Blast-radius analysis: who calls this function/class, transitive ripple, impacted tests, risk score |
+| `devmind drift` | Circular imports, layer-boundary violations, churn × complexity fragility hotspots |
+| `devmind blame <file>` | True code ownership %, meaningful-commit timeline, collision risk, related ADRs |
+| `devmind secure` | Hardcoded secrets, dangerous sinks, injection risks, crypto weaknesses, known CVEs |
+
 ---
 
 ## ⚡ Quickstart (30 Seconds)
@@ -53,11 +71,12 @@ ollama pull mistral
 ```
 
 ### Step 3: Ensure Ollama Server is Running
-Ollama runs in the background automatically. To verify, run:
+On **macOS/Windows**, the Ollama.app/desktop app starts the server automatically once installed — nothing else to do.
+On **Linux** (or if you're not running the desktop app), start it manually:
 ```bash
 ollama serve
 ```
-*(By default, Ollama is accessible at `http://localhost:11434`)*
+*(By default, Ollama is accessible at `http://localhost:11434`. If you already have Ollama.app running, `ollama serve` will just report the port is in use — that's fine, it means it's already up.)*
 
 ### Step 4: Configure DevMind for Ollama
 Run the DevMind setup wizard:
@@ -139,13 +158,23 @@ If you prefer cloud models without needing local GPU/RAM:
 ---
 
 ### ⚙️ 4. Configuration & Maintenance
-* **`devmind init` / `devmind config`**: Interactive setup wizard to switch providers or keys.
+* **`devmind init`**: Interactive setup wizard — first-time provider configuration.
+* **`devmind config`**: View your active provider/model/embedding config, switch provider, update just a key or model, or diff global vs local config.
+* **`devmind doctor`**: Diagnose your environment — Python version, git, AI provider connectivity, local memory integrity, FastEmbed readiness, update status.
+  ```bash
+  devmind doctor
+  ```
 * **`devmind refresh`**: Re-scan changed files and refine relationship links in graph memory.
 * **`devmind forget`**: Surgically remove a file or wipe local memory.
   ```bash
   devmind forget --file auth/middleware.py   # Delete specific file memory
   devmind forget --all                      # Wipe local memory databases
   ```
+
+### 🔧 Environment Variables
+* `DEVMIND_NO_UPDATE_CHECK=1` — disable the background PyPI update-check notification (useful for CI).
+* `DEVMIND_RECALL_TOP_K` — number of memory chunks returned per query (default `3`, capped at `20`).
+* `CI=1` — also disables the update check automatically (most CI runners set this already).
 
 ---
 
@@ -170,7 +199,11 @@ Create a `.mcp.json` file in your repository root:
   }
 }
 ```
-*Your AI assistant can now call `query_codebase_memory` and `log_decision_record` automatically instead of burning 50,000+ tokens blindly reading random files!*
+DevMind's MCP server exposes two tools to your AI assistant:
+* **`query_codebase_memory(query)`** — queries the persistent knowledge graph for architectural context, past decisions, or git history.
+* **`log_architectural_decision(decision)`** — logs a new ADR into memory when the assistant makes a major design change.
+
+*Your AI assistant can now call these automatically instead of burning 50,000+ tokens blindly reading random files!*
 
 ---
 

@@ -40,10 +40,12 @@ def check_python_version() -> CheckResult:
             fix_hint="Install Python 3.10 or newer.",
         )
 
+    import importlib
+
     missing_extensions = []
     for module_name in ("sqlite3", "ssl", "ctypes"):
         try:
-            __import__(module_name)
+            importlib.import_module(module_name)
         except ImportError:
             missing_extensions.append(module_name)
 
@@ -182,6 +184,24 @@ def check_memory_integrity() -> CheckResult:
 
     if not connectivity_ok:
         return CheckResult("Local Memory Graph", "fail", f"{size_mb:.1f} MB indexed{connectivity_detail}")
+
+    # Warn if the index was built by a different DevMind minor version — the
+    # underlying Cognee schema can change between releases, which sometimes
+    # surfaces as cryptic SQLAlchemy errors on an old index.
+    from devmind import __version__ as current_version
+    version_stamp_path = os.path.join(system_path, ".devmind_version")
+    if os.path.exists(version_stamp_path):
+        try:
+            with open(version_stamp_path, "r", encoding="utf-8") as f:
+                indexed_version = f.read().strip()
+            if indexed_version and indexed_version.split(".")[:2] != current_version.split(".")[:2]:
+                return CheckResult(
+                    "Local Memory Graph", "warn",
+                    f"{size_mb:.1f} MB indexed by v{indexed_version}, but DevMind is now v{current_version}",
+                    fix_hint="If queries behave oddly, run 'devmind forget --all' then 'devmind remember' to rebuild the index.",
+                )
+        except OSError:
+            pass
 
     return CheckResult("Local Memory Graph", "ok", f"{size_mb:.1f} MB indexed in .cognee_system/.cognee_data")
 

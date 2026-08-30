@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes, get_project_root
+from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes, get_project_root, dataset_name_for_project
 from devmind.ingestion.file_reader import scan_codebase_files
 from devmind.ingestion.git_parser import get_git_history, get_changed_files_git_diff, is_git_repo
 from devmind.ingestion.comment_extractor import get_codebase_comments
@@ -96,8 +96,9 @@ def _version_callback(value: bool):
         typer.echo(f"devmind-cli v{__version__}")
         raise typer.Exit()
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: Optional[bool] = typer.Option(
         None, "--version", "-v",
         callback=_version_callback, is_eager=True,
@@ -113,6 +114,53 @@ def main(
     logging.basicConfig(level=level, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
     logging.getLogger("devmind").setLevel(level)
 
+    if ctx.invoked_subcommand is None:
+        from rich.console import Console
+        from rich.panel import Panel
+        console = Console()
+        console.print(Panel.fit(
+            "[bold cyan]🧠 DevMind — Codebase Memory for Developers[/bold cyan]\n"
+            "[dim]Your codebase finally has a memory.[/dim]\n\n"
+            "  [bold]devmind init[/bold]      Configure your AI provider (30s)\n"
+            "  [bold]devmind remember[/bold]  Index this codebase into memory\n"
+            "  [bold]devmind ask[/bold] \"...\"  Ask a question about the codebase\n"
+            "  [bold]devmind doctor[/bold]    Check your environment & config\n\n"
+            "[dim]Run 'devmind --help' to see every command.[/dim]",
+            border_style="cyan", padding=(1, 2)
+        ))
+
+def _notify_first_fastembed_download():
+    """
+    FastEmbed silently downloads its embedding model (~100MB) on first use,
+    which can look like a hang. Print a one-time heads-up per machine.
+    """
+    if os.getenv("EMBEDDING_PROVIDER", "fastembed").lower() != "fastembed":
+        return
+    from devmind.config_wizard import get_global_config_path
+    marker = get_global_config_path().parent / ".fastembed_downloaded"
+    if marker.exists():
+        return
+    typer.echo(
+        "[Note] First run: downloading the local FastEmbed embedding model "
+        "(~100MB, one-time). This may take 30-60s depending on your connection..."
+    )
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        pass
+
+def _write_version_stamp():
+    """Records the DevMind version that built the current memory index, so
+    `devmind doctor` can warn if the schema might have changed since."""
+    from devmind import __version__
+    from devmind.memory import system_path
+    try:
+        with open(os.path.join(system_path, ".devmind_version"), "w", encoding="utf-8") as f:
+            f.write(__version__)
+    except OSError:
+        pass
+
 async def remember_pipeline(directory: str, incremental: bool = False, deep: bool = False):
     """
     Core async pipeline for scanning files, comments, and git logs,
@@ -124,8 +172,7 @@ async def remember_pipeline(directory: str, incremental: bool = False, deep: boo
               (fast mode: local embeddings only, 0 API calls).
     """
     # Determine a single, unified dataset name based on the target folder
-    folder_name = os.path.basename(os.path.abspath(directory)).lower().replace("-", "_").replace(" ", "_")
-    dataset_name = f"devmind_{folder_name}"
+    dataset_name = dataset_name_for_project(directory)
 
     mode_label = "deep (LLM graph extraction)" if deep else "fast (local embeddings only)"
 
@@ -166,13 +213,15 @@ async def remember_pipeline(directory: str, incremental: bool = False, deep: boo
     success = await remember_content(contents, dataset_name=dataset_name, deep=deep)
     if success:
         typer.echo(f"Successfully remembered {len(files)} files.")
+        _write_version_stamp()
     else:
         typer.echo(f"[Warning] Failed to ingest files.")
 
     # 2. Extract and Ingest Git History
     git_logs = get_git_history(directory, max_commits=20)
     if git_logs:
-        typer.echo("Ingesting combined git history into Cognee...")
+        commit_word = "commit" if len(git_logs) == 1 else "commits"
+        typer.echo(f"Ingesting git history ({len(git_logs)} {commit_word}) into Cognee...")
         combined_git = "\n\n---\n\n".join(git_logs)
         success = await remember_content(combined_git, dataset_name=dataset_name, deep=deep)
         if success:
@@ -192,7 +241,7 @@ async def remember_pipeline(directory: str, incremental: bool = False, deep: boo
         else:
             typer.echo("[Warning] Failed to ingest code comments.")
 
-@app.command()
+@app.command(rich_help_panel="Memory & Ingestion")
 def remember(
     directory: str = typer.Option(
         ".", 
@@ -222,11 +271,33 @@ def remember(
             return
 
     initialize_cognee()
+    _notify_first_fastembed_download()
     resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
+
+    # Guard against accidentally scanning the whole filesystem or home
+    # directory when run from an unexpected location (e.g. an empty shell).
+    home_dir = os.path.abspath(os.path.expanduser("~"))
+    is_fs_root = os.path.dirname(resolved_dir) == resolved_dir  # "/" on POSIX, "C:\\" on Windows
+    if (is_fs_root or resolved_dir == home_dir) and not is_git_repo(resolved_dir):
+        confirmed = typer.confirm(
+            f"'{resolved_dir}' looks like your filesystem root or home directory, not a "
+            "project — this could scan a very large number of files. Continue anyway?",
+            default=False,
+        )
+        if not confirmed:
+            typer.echo("Cancelled.")
+            raise typer.Exit(code=0)
+
+    if deep and os.getenv("LLM_PROVIDER", "").lower() == "ollama":
+        typer.echo(
+            "[Warning] --deep mode runs full LLM knowledge-graph extraction. With a local "
+            "Ollama model this can be slow or exhaust memory on large codebases."
+        )
+
     run_async(remember_pipeline(resolved_dir, incremental=incremental, deep=deep))
     typer.echo("[Success] Codebase memory ingestion completed.")
 
-@app.command()
+@app.command(rich_help_panel="Configuration")
 def init():
     """
     Interactive setup wizard to configure AI model provider (Groq, Gemini, Claude, OpenAI, Ollama, OpenRouter).
@@ -234,7 +305,7 @@ def init():
     from devmind.config_wizard import run_setup_wizard
     run_setup_wizard()
 
-@app.command()
+@app.command(rich_help_panel="Configuration")
 def config():
     """
     View your active AI model provider, model, and embedding configuration,
@@ -244,7 +315,7 @@ def config():
     from devmind.config_wizard import run_config_inspector
     run_config_inspector()
 
-@app.command()
+@app.command(rich_help_panel="Memory & Ingestion")
 def ask(
     query: str = typer.Argument(..., help="Your natural language question about the codebase.")
 ):
@@ -306,7 +377,7 @@ async def _chat_session_async(console):
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {str(e)}")
 
-@app.command()
+@app.command(rich_help_panel="Memory & Ingestion")
 def chat():
     """
     Start an interactive DevMind terminal chat session to explore your codebase.
@@ -329,7 +400,7 @@ def chat():
 
     run_async(_chat_session_async(console))
 
-@app.command()
+@app.command(rich_help_panel="Memory & Ingestion")
 def log(
     decision: str = typer.Argument(..., help="The Architectural Decision Record (ADR) text to log.")
 ):
@@ -350,7 +421,7 @@ def log(
     else:
         typer.echo("[Error] Failed to log architectural decision.")
 
-@app.command()
+@app.command(rich_help_panel="Memory & Ingestion")
 def refresh(
     directory: str = typer.Option(
         ".", 
@@ -363,9 +434,8 @@ def refresh(
     """
     initialize_cognee()
     resolved_dir = get_project_root(directory) if directory == "." else os.path.abspath(directory)
-    folder_name = os.path.basename(os.path.abspath(resolved_dir)).lower().replace("-", "_").replace(" ", "_")
-    dataset_name = f"devmind_{folder_name}"
-    
+    dataset_name = dataset_name_for_project(resolved_dir)
+
     typer.echo(f"Scanning for codebase changes to refresh memory (Dataset: {dataset_name})...")
     run_async(remember_pipeline(resolved_dir))
     
@@ -377,7 +447,7 @@ def refresh(
     else:
         typer.echo("[Warning] File changes re-ingested, but relationship refinement had warnings.")
 
-@app.command()
+@app.command(rich_help_panel="Memory & Ingestion")
 def forget(
     file_path: str = typer.Option(
         None, 
@@ -419,7 +489,7 @@ def forget(
     else:
         typer.echo("[Warning] Please specify either --file <path> to forget a file, or --all to wipe all databases.")
 
-@app.command()
+@app.command(rich_help_panel="Interfaces")
 def dashboard(
     port: int = typer.Option(8000, "--port", "-p", help="Port to run the dashboard server on."),
     directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to target.")
@@ -436,7 +506,7 @@ def dashboard(
     typer.echo(f"Starting DevMind Web UI Dashboard on http://localhost:{port} targeting '{abs_dir}' ...")
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
 
-@app.command()
+@app.command(rich_help_panel="Interfaces")
 def mcp():
     """
     Start the DevMind MCP server for integration with Claude Code.
@@ -446,7 +516,7 @@ def mcp():
     from devmind.integrations.claude_code import mcp as mcp_instance
     mcp_instance.run()
 
-@app.command()
+@app.command(rich_help_panel="Interfaces")
 def graph(
     port: int = typer.Option(8000, "--port", "-p", help="Port to run the visual graph dashboard on."),
     directory: str = typer.Option(".", "--dir", "-d", help="The codebase directory to map.")
@@ -481,7 +551,7 @@ def graph(
     threading.Thread(target=_open_browser_when_ready, daemon=True).start()
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
 
-@app.command()
+@app.command(rich_help_panel="Interfaces")
 def digest(
     output: str = typer.Option("DEV_MINDMAP.md", "--output", "-o", help="Output file name for the architecture digest."),
     directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to analyze.")
@@ -539,7 +609,7 @@ def digest(
         
     typer.echo(f"[Success] Architecture digest generated at '{out_path}'.")
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def health(
     directory: str = typer.Option(
         ".",
@@ -871,11 +941,13 @@ def health(
         console.print(f"\n[dim]📄 Report also written to: [cyan]{out_path}[/cyan][/dim]")
 
     # ── CI threshold gate ─────────────────────────────────────────────────────
+    if threshold == 0:
+        console.print("\n[dim]⚠️  --threshold 0 never fails the gate (scores can't go below 0) — did you mean a higher value?[/dim]")
     if threshold is not None and score < threshold:
         console.print(f"\n[bold red]❌ Health score {score} is below threshold {threshold}. Exiting with code 1.[/bold red]")
         raise typer.Exit(code=1)
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def onboard(
     directory: str = typer.Option(
         ".",
@@ -983,11 +1055,12 @@ def onboard(
 
     console.print(f"[bold green]✨ Onboarding guide generated at:[/bold green] [cyan]{out_path}[/cyan]\n")
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def impact(
     target: str = typer.Argument(
         ...,
-        help="The function, class, or file path to analyze blast radius for."
+        help="A function/method name (e.g. 'authenticate'), class name (e.g. 'UserService'), "
+             "or file path (e.g. 'devmind/memory.py') to analyze blast radius for."
     ),
     directory: str = typer.Option(
         ".",
@@ -1010,6 +1083,11 @@ def impact(
 
     Traverses AST call graphs and import networks to reveal direct callers,
     transitive ripples, impacted test suites, and calculates a risk severity score.
+
+    Examples:
+        devmind impact authenticate
+        devmind impact UserService --depth 5
+        devmind impact devmind/memory.py --output IMPACT.md
     """
     from rich.console import Console
     from rich.panel import Panel
@@ -1041,6 +1119,17 @@ def impact(
     )
     console.print(Panel(target_header, title="[bold magenta]💥 DevMind Blast Radius Analysis[/bold magenta]", border_style=sev_colour))
     console.print()
+
+    if report.ambiguous_other_locations:
+        others = "\n".join(f"  • {f}:L{ln}" for f, ln in report.ambiguous_other_locations[:5])
+        console.print(Panel(
+            f"⚠️  '{report.target_symbol}' is defined in {len(report.ambiguous_other_locations) + 1} places. "
+            f"Analyzed the first match at [cyan]{report.target_file}:L{report.target_line}[/cyan]. "
+            f"Other definitions:\n{others}\n"
+            f"[dim]Tip: re-run with a more specific target if this isn't the one you meant.[/dim]",
+            title="[bold]⚠️  Ambiguous Target[/bold]", border_style="yellow"
+        ))
+        console.print()
 
     # 1. Direct Callers Table
     if report.direct_callers:
@@ -1100,7 +1189,7 @@ def impact(
         console.print(f"[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
 
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def drift(
     directory: str = typer.Option(
         ".",
@@ -1141,7 +1230,7 @@ def drift(
         console.print(f"\n[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
 
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def blame(
     file_path: str = typer.Argument(..., help="The relative path of the file to analyze."),
     expert: bool = typer.Option(
@@ -1180,7 +1269,7 @@ def blame(
     render_blame_terminal(report, console=console, expert_only=expert)
 
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def secure(
     directory: str = typer.Option(
         ".",
@@ -1240,11 +1329,11 @@ def secure(
         console.print(Panel("✅ [bold green]Clean Audit:[/bold green] No security vulnerabilities or hardcoded secrets detected.", title="🛡️ Status", border_style="green"))
         console.print()
     else:
-        table = Table(title=f"🚨 Detected Vulnerabilities ({len(report.findings)} items)", border_style="red", show_lines=True)
+        table = Table(title=f"🚨 Detected Vulnerabilities ({len(report.findings)} items)", border_style="red", show_lines=True, expand=True)
         table.add_column("Sev", justify="center", width=8)
-        table.add_column("Rule & Title", style="bold white", width=28)
-        table.add_column("Location", style="cyan", width=22)
-        table.add_column("Risk & Remediation", width=42)
+        table.add_column("Rule & Title", style="bold white", ratio=2)
+        table.add_column("Location", style="cyan", ratio=2)
+        table.add_column("Risk & Remediation", ratio=3)
 
         for f in report.findings[:25]:  # show top 25 findings
             if f.severity == "CRITICAL":
@@ -1272,7 +1361,7 @@ def secure(
         console.print(f"[dim]📄 Security audit written to: [cyan]{out_path}[/cyan][/dim]\n")
 
 
-@app.command()
+@app.command(rich_help_panel="Offline Analysis")
 def doctor():
     """
     Run self-healing system & environment diagnostics: Python version, git,

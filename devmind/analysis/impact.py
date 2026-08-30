@@ -46,6 +46,9 @@ class ImpactReport:
     severity: str = "LOW"         # "LOW" | "MODERATE" | "CRITICAL"
     risk_score: int = 0           # 0 - 100
     recommended_actions: List[str] = field(default_factory=list)
+    # Other (file, line) locations sharing the same symbol name, when the
+    # target was ambiguous and only the first match was analyzed.
+    ambiguous_other_locations: List[Tuple[str, int]] = field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -223,12 +226,17 @@ class ImpactAnalyzer:
                 break
 
         # Check if target is a known defined symbol
+        ambiguous_other_locations: List[Tuple[str, int]] = []
         if not is_file_target and target_clean in self.definitions:
             defs = self.definitions[target_clean]
             if defs:
                 target_file = defs[0]["file"]
                 target_type = defs[0]["type"]
                 target_line = defs[0]["line"]
+                if len(defs) > 1:
+                    # Multiple symbols share this name — analysis picked the
+                    # first; surface the others so the user can disambiguate.
+                    ambiguous_other_locations = [(d["file"], d["line"]) for d in defs[1:]]
 
         # If targeting a file, collect all exported symbols in that file
         target_symbols: Set[str] = set()
@@ -352,7 +360,8 @@ class ImpactAnalyzer:
             impacted_tests=sorted(list(impacted_tests_set)),
             severity=severity,
             risk_score=risk_score,
-            recommended_actions=recommendations
+            recommended_actions=recommendations,
+            ambiguous_other_locations=ambiguous_other_locations,
         )
 
 
