@@ -2,7 +2,7 @@ import os
 import time
 import asyncio
 from fastmcp import FastMCP
-from devmind.memory import recall_query, remember_content
+from devmind.memory import recall_query, remember_content, ADR_DATASET_NAME
 
 mcp = FastMCP("DevMind")
 
@@ -25,9 +25,9 @@ async def log_architectural_decision(decision: str) -> str:
     Use this when introducing major design changes, library switches, or design patterns.
     """
     try:
-        dataset_name = f"adr_decision_{int(time.time())}"
-        tagged_decision = f"Architectural Decision Record:\n{decision}"
-        success = await remember_content(tagged_decision, dataset_name=dataset_name)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        tagged_decision = f"Architectural Decision Record:\nDate: {timestamp}\n{decision}"
+        success = await remember_content(tagged_decision, dataset_name=ADR_DATASET_NAME)
         if success:
             return "Successfully logged architectural decision to memory."
         else:

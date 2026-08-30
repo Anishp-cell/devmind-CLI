@@ -419,6 +419,204 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
     return True
 
 
+# Maps provider_id -> (primary single-key env var, optional multi-key env var)
+PROVIDER_KEY_ENV = {
+    "groq": ("GROQ_API_KEY", "GROQ_API_KEYS"),
+    "gemini": ("GEMINI_API_KEY", "GEMINI_API_KEYS"),
+    "anthropic": ("ANTHROPIC_API_KEY", None),
+    "openai": ("OPENAI_API_KEY", None),
+    "openrouter": ("OPENROUTER_API_KEY", None),
+    "custom": ("OPENAI_API_KEY", None),
+    "ollama": (None, None),
+}
+
+_SECRET_KEY_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+
+
+def _mask_value(key: str, value: Any) -> str:
+    """Masks values whose key name looks like a credential."""
+    value_str = str(value)
+    if any(hint in key.upper() for hint in _SECRET_KEY_HINTS) and value_str:
+        return f"{value_str[:6]}...{value_str[-4:]}" if len(value_str) > 10 else "***"
+    return value_str
+
+
+def get_active_config_summary() -> Dict[str, Any]:
+    """
+    Loads .env + global config cascade (via devmind.memory.load_api_keys) and
+    returns a snapshot of the currently active configuration.
+    """
+    from devmind.memory import load_api_keys
+
+    load_api_keys()  # cascades global config.json values into os.environ
+
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    key_env, keys_env = PROVIDER_KEY_ENV.get(provider, (None, None))
+
+    active_key_display = None
+    if provider == "ollama":
+        active_key_display = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    else:
+        raw_value = None
+        if keys_env and os.getenv(keys_env):
+            raw_value = os.getenv(keys_env).split(",")[0].strip()
+        elif key_env and os.getenv(key_env):
+            raw_value = os.getenv(key_env)
+        if raw_value:
+            active_key_display = _mask_value(key_env or "KEY", raw_value)
+
+    return {
+        "provider": provider,
+        "model": os.getenv("LLM_MODEL", "(default)"),
+        "embedding_provider": os.getenv("EMBEDDING_PROVIDER", "fastembed"),
+        "embedding_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+        "embedding_dimensions": os.getenv("EMBEDDING_DIMENSIONS", "384"),
+        "active_key_display": active_key_display,
+        "global_config_path": str(get_global_config_path()),
+        "global_config_exists": get_global_config_path().exists(),
+        "local_env_path": str(pathlib.Path(".env").resolve()),
+        "local_env_exists": pathlib.Path(".env").resolve().exists(),
+    }
+
+
+def render_config_summary(console: Console, summary: Dict[str, Any]):
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("Field", style="bold cyan", width=20)
+    table.add_column("Value", style="white")
+
+    table.add_row("Active Provider", summary["provider"])
+    table.add_row("Model", summary["model"])
+    table.add_row("Credential", summary["active_key_display"] or "[dim]Not configured[/dim]")
+    table.add_row("Embedding Provider", summary["embedding_provider"])
+    table.add_row("Embedding Model", summary["embedding_model"])
+    table.add_row("Embedding Dimensions", summary["embedding_dimensions"])
+    table.add_row("", "")
+    table.add_row(
+        "Global Config",
+        f"{summary['global_config_path']}"
+        f" {'[green](exists)[/green]' if summary['global_config_exists'] else '[dim](not created)[/dim]'}"
+    )
+    table.add_row(
+        "Local .env",
+        f"{summary['local_env_path']}"
+        f" {'[green](exists)[/green]' if summary['local_env_exists'] else '[dim](not created)[/dim]'}"
+    )
+
+    console.print(Panel(table, title="[bold magenta]⚙️  DevMind Active Configuration[/bold magenta]", border_style="magenta"))
+
+
+def update_api_key_only(console: Console, provider: str):
+    """Prompts for and saves a new API key for the currently active provider only."""
+    key_env, _ = PROVIDER_KEY_ENV.get(provider, (None, None))
+    if provider == "ollama":
+        console.print("[dim]Ollama does not use an API key. Nothing to update.[/dim]")
+        return
+    if not key_env:
+        console.print(f"[yellow]Unknown provider '{provider}' — cannot determine which key to update.[/yellow]")
+        return
+
+    new_key = Prompt.ask(f"[bold green]Enter new API key for {provider}[/bold green]", password=True).strip()
+    if not new_key:
+        console.print("[dim]No key entered. Cancelled.[/dim]")
+        return
+
+    scope_choice = Prompt.ask("Save globally [1] or locally (.env) [2]?", choices=["1", "2"], default="1")
+    global_scope = (scope_choice == "1")
+    saved_path = save_configuration({key_env: new_key}, global_scope=global_scope)
+    os.environ[key_env] = new_key
+    console.print(f"[bold green]✅ API key updated and saved to:[/bold green] [cyan]{saved_path}[/cyan]")
+
+
+def update_model_only(console: Console, provider: str, current_model: str):
+    """Prompts for and saves a new default model name for the currently active provider."""
+    new_model = Prompt.ask("[bold green]Enter new default model[/bold green]", default=current_model).strip()
+    if not new_model:
+        console.print("[dim]No model entered. Cancelled.[/dim]")
+        return
+
+    scope_choice = Prompt.ask("Save globally [1] or locally (.env) [2]?", choices=["1", "2"], default="1")
+    global_scope = (scope_choice == "1")
+    saved_path = save_configuration({"LLM_MODEL": new_model}, global_scope=global_scope)
+    os.environ["LLM_MODEL"] = new_model
+    console.print(f"[bold green]✅ Default model updated to '{new_model}' and saved to:[/bold green] [cyan]{saved_path}[/cyan]")
+
+
+def show_config_diff(console: Console):
+    """Displays global config.json contents side-by-side with local .env contents."""
+    global_cfg = load_global_config()
+    local_env: Dict[str, str] = {}
+    env_path = pathlib.Path(".env").resolve()
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#") and "=" in stripped:
+                    k, v = stripped.split("=", 1)
+                    local_env[k.strip()] = v.strip()
+
+    all_keys = sorted(set(global_cfg.keys()) | set(local_env.keys()))
+
+    table = Table(title="Global vs Local Configuration", show_header=True, header_style="bold cyan")
+    table.add_column("Key", style="bold white")
+    table.add_column(f"Global ({get_global_config_path()})", style="cyan")
+    table.add_column(f"Local ({env_path})", style="yellow")
+
+    if not all_keys:
+        console.print("[dim]No global or local configuration found.[/dim]")
+        return
+
+    for k in all_keys:
+        g_val = _mask_value(k, global_cfg[k]) if k in global_cfg else "[dim]—[/dim]"
+        l_val = _mask_value(k, local_env[k]) if k in local_env else "[dim]—[/dim]"
+        table.add_row(k, g_val, l_val)
+
+    console.print(table)
+
+
+def run_config_inspector(console: Optional[Console] = None):
+    """
+    `devmind config`: shows the active configuration, then offers a menu to
+    switch provider, update keys/model in place, view the global/local diff,
+    or re-run the full setup wizard — without forcing a full re-entry of
+    every setting like `devmind init` does.
+    """
+    if console is None:
+        console = Console()
+
+    console.print()
+    summary = get_active_config_summary()
+    render_config_summary(console, summary)
+    console.print()
+
+    menu_table = Table(show_header=False, box=None, padding=(0, 2))
+    menu_table.add_column("Key", style="bold green", width=5)
+    menu_table.add_column("Action", style="white")
+    menu_table.add_row("[1]", "Switch active provider")
+    menu_table.add_row("[2]", "Update API keys")
+    menu_table.add_row("[3]", "Change default model")
+    menu_table.add_row("[4]", "View global vs local config diff")
+    menu_table.add_row("[5]", "Re-run full setup wizard")
+    menu_table.add_row("[0]", "Exit")
+    console.print(menu_table)
+    console.print()
+
+    choice = Prompt.ask("[bold cyan]Enter choice[/bold cyan]", choices=["0", "1", "2", "3", "4", "5"], default="0")
+
+    if choice == "1":
+        run_setup_wizard(console=console)
+    elif choice == "2":
+        update_api_key_only(console, summary["provider"])
+    elif choice == "3":
+        update_model_only(console, summary["provider"], summary["model"])
+    elif choice == "4":
+        console.print()
+        show_config_diff(console)
+    elif choice == "5":
+        run_setup_wizard(console=console)
+    else:
+        console.print("[dim]No changes made.[/dim]")
+
+
 def ensure_configured(console: Optional[Console] = None) -> bool:
     """
     Checks if an LLM provider is configured.

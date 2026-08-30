@@ -9,6 +9,7 @@ Fails silently when offline or on timeouts.
 from __future__ import annotations
 
 import os
+import sys
 import json
 import time
 import urllib.request
@@ -21,6 +22,13 @@ logger = logging.getLogger("devmind.version_checker")
 
 CACHE_TTL_SECONDS = 86400  # 24 hours
 PYPI_URL = "https://pypi.org/pypi/devmind-cli/json"
+
+# Argv flags that indicate a fast, non-interactive invocation where a network
+# round-trip for update checking would only add latency for no benefit.
+_SKIP_UPDATE_CHECK_ARGS = {
+    "--help", "-h", "--version", "-v",
+    "--install-completion", "--show-completion",
+}
 
 
 def get_cache_file_path() -> pathlib.Path:
@@ -100,6 +108,9 @@ def check_for_updates() -> Optional[str]:
     if os.environ.get("DEVMIND_NO_UPDATE_CHECK", "").lower() in ("1", "true", "yes"):
         return None
     if os.environ.get("CI", "").lower() in ("1", "true", "yes"):
+        return None
+    # Skip for --help/--version/completion invocations — these should be instant
+    if _SKIP_UPDATE_CHECK_ARGS.intersection(sys.argv):
         return None
 
     # 1. Check local cache first

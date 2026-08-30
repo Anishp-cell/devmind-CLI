@@ -15,7 +15,7 @@ if sys.platform == 'win32':
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from devmind.memory import recall_query, remember_content, initialize_cognee
+from devmind.memory import recall_query, remember_content, initialize_cognee, ADR_DATASET_NAME
 from devmind.cli import remember_pipeline
 
 logger = logging.getLogger("devmind.web")
@@ -68,8 +68,9 @@ async def api_log(payload: dict):
     
     try:
         import time
-        dataset_name = f"adr_decision_{int(time.time())}"
-        success = await remember_content(f"Architectural Decision Record:\n{decision}", dataset_name=dataset_name)
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        tagged_decision = f"Architectural Decision Record:\nDate: {timestamp}\n{decision}"
+        success = await remember_content(tagged_decision, dataset_name=ADR_DATASET_NAME)
         return {"success": success}
     except Exception as e:
         logger.error(f"Error logging decision: {e}")

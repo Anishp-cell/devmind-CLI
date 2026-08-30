@@ -26,8 +26,9 @@ import atexit
 # Register background version update checker to notify user upon exit if an update is available
 atexit.register(show_update_notification)
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Default to WARNING so stdout stays clean for Rich UI output; `--debug`
+# escalates this to DEBUG for full trace visibility.
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("devmind.cli")
 
 def run_async(coro):
@@ -88,6 +89,29 @@ app = typer.Typer(
     help="DevMind – Codebase Memory for Developers. Powered by Cognee.",
     add_completion=False
 )
+
+def _version_callback(value: bool):
+    if value:
+        from devmind import __version__
+        typer.echo(f"devmind-cli v{__version__}")
+        raise typer.Exit()
+
+@app.callback()
+def main(
+    version: Optional[bool] = typer.Option(
+        None, "--version", "-v",
+        callback=_version_callback, is_eager=True,
+        help="Show the DevMind CLI version and exit."
+    ),
+    debug: bool = typer.Option(
+        False, "--debug",
+        help="Enable verbose debug logging output."
+    )
+):
+    """DevMind – Codebase Memory for Developers. Powered by Cognee."""
+    level = logging.DEBUG if debug else logging.WARNING
+    logging.basicConfig(level=level, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+    logging.getLogger("devmind").setLevel(level)
 
 async def remember_pipeline(directory: str, incremental: bool = False, deep: bool = False):
     """
@@ -207,10 +231,12 @@ def init():
 @app.command()
 def config():
     """
-    View or reconfigure your active AI model provider and credentials.
+    View your active AI model provider, model, and embedding configuration,
+    and interactively switch provider, update keys/model, or diff global vs
+    local config — without re-entering every setting.
     """
-    from devmind.config_wizard import run_setup_wizard
-    run_setup_wizard()
+    from devmind.config_wizard import run_config_inspector
+    run_config_inspector()
 
 @app.command()
 def ask(
@@ -239,6 +265,41 @@ def ask(
         padding=(1, 2)
     ))
 
+async def _chat_session_async(console):
+    """
+    Runs the interactive chat REPL inside a single persistent event loop
+    (reused across every query) instead of spinning up a new loop per message.
+    """
+    from rich.markdown import Markdown
+    from rich.prompt import Prompt
+
+    while True:
+        try:
+            query = Prompt.ask("\n[bold green]You[/bold green]")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[dim]Goodbye![/dim]")
+            return
+
+        if not query.strip():
+            continue
+
+        command = query.lower().strip()
+        if command in ("exit", "quit", "q"):
+            console.print("[dim]Goodbye![/dim]")
+            return
+        if command == "clear":
+            console.clear()
+            continue
+
+        try:
+            with console.status("[bold cyan]DevMind is thinking...[/bold cyan]", spinner="dots"):
+                answer = await recall_query(query)
+
+            console.print("\n[bold magenta]DevMind:[/bold magenta]")
+            console.print(Markdown(answer))
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {str(e)}")
+
 @app.command()
 def chat():
     """
@@ -249,34 +310,18 @@ def chat():
         return
 
     initialize_cognee()
-    
+
     from rich.console import Console
-    from rich.markdown import Markdown
     from rich.panel import Panel
-    from rich.prompt import Prompt
 
     console = Console()
-    console.print(Panel.fit("[bold blue]DevMind Codebase Chat[/bold blue]\n[dim]Type your queries below. Type 'exit' or 'quit' to close.[/dim]", border_style="blue"))
-    
-    while True:
-        try:
-            query = Prompt.ask("\n[bold green]You[/bold green]")
-            if not query.strip():
-                continue
-            if query.lower().strip() in ['exit', 'quit', 'clear']:
-                console.print("[dim]Goodbye![/dim]")
-                break
-                
-            with console.status("[bold cyan]DevMind is thinking...[/bold cyan]", spinner="dots"):
-                answer = run_async(recall_query(query))
-                
-            console.print("\n[bold magenta]DevMind:[/bold magenta]")
-            console.print(Markdown(answer))
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Goodbye![/dim]")
-            break
-        except Exception as e:
-            console.print(f"[bold red]Error:[/bold red] {str(e)}")
+    console.print(Panel.fit(
+        "[bold blue]DevMind Codebase Chat[/bold blue]\n"
+        "[dim]Type your queries below. Type 'clear' to clear the screen, 'exit'/'quit'/'q' to close.[/dim]",
+        border_style="blue"
+    ))
+
+    run_async(_chat_session_async(console))
 
 @app.command()
 def log(
@@ -287,12 +332,13 @@ def log(
     """
     initialize_cognee()
     typer.echo(f"Logging decision: '{decision}'...")
-    
-    tagged_decision = f"Architectural Decision Record:\n{decision}"
+
     import time
-    dataset_name = f"adr_decision_{int(time.time())}"
-    
-    success = run_async(remember_content(tagged_decision, dataset_name=dataset_name))
+    from devmind.memory import ADR_DATASET_NAME
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+    tagged_decision = f"Architectural Decision Record:\nDate: {timestamp}\n{decision}"
+
+    success = run_async(remember_content(tagged_decision, dataset_name=ADR_DATASET_NAME))
     if success:
         typer.echo("[Success] Architectural decision successfully logged.")
     else:
@@ -792,6 +838,7 @@ def health(
         md_lines += ["", "---", "*Generated by DevMind CLI (`devmind health`)*"]
 
         out_path = _pl.Path(output) if _pl.Path(output).is_absolute() else _pl.Path(resolved_dir) / output
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write("\n".join(md_lines))
         console.print(f"\n[dim]📄 Report also written to: [cyan]{out_path}[/cyan][/dim]")
@@ -903,6 +950,7 @@ def onboard(
     # Export Markdown file
     md_content = format_onboarding_markdown(report)
     out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(md_content)
 
@@ -1019,6 +1067,7 @@ def impact(
     if output:
         md_content = format_impact_markdown(report)
         out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(md_content)
         console.print(f"[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
@@ -1059,6 +1108,7 @@ def drift(
 
     if output:
         out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(format_drift_markdown(report))
         console.print(f"\n[dim]📄 Report written to: [cyan]{out_path}[/cyan][/dim]\n")
@@ -1185,9 +1235,31 @@ def secure(
     # 3. Export Markdown if requested
     if output:
         out_path = pathlib.Path(output) if pathlib.Path(output).is_absolute() else pathlib.Path(resolved_dir) / output
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(format_secure_markdown(report))
         console.print(f"[dim]📄 Security audit written to: [cyan]{out_path}[/cyan][/dim]\n")
+
+
+@app.command()
+def doctor():
+    """
+    Run self-healing system & environment diagnostics: Python version, git,
+    AI provider connectivity, local memory/cache integrity, FastEmbed
+    readiness, and network/update status.
+    """
+    from devmind.doctor import run_diagnostics, render_diagnostics
+    from rich.console import Console
+
+    console = Console()
+    with console.status("[bold cyan]🩺 Running DevMind diagnostics...[/bold cyan]", spinner="dots"):
+        results = run_diagnostics()
+
+    console.print()
+    render_diagnostics(results, console=console)
+
+    if any(r.status == "fail" for r in results):
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

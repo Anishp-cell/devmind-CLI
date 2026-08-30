@@ -16,9 +16,35 @@ logger = logging.getLogger("devmind.memory")
 # Load dotenv and set project-scoped directories BEFORE importing cognee
 load_dotenv(find_dotenv(usecwd=True))
 
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def get_project_root(start_dir: str = None) -> str:
+    """
+    Finds the nearest parent directory that contains a project marker (.git, .env, pyproject.toml, or setup.py).
+    Falls back to start_dir if none found.
+    """
+    curr = os.path.abspath(start_dir or os.getcwd())
+    while True:
+        if any(os.path.exists(os.path.join(curr, marker)) for marker in (".git", ".env", "pyproject.toml", "setup.py")):
+            return curr
+        parent = os.path.dirname(curr)
+        if parent == curr:
+            break
+        curr = parent
+    return os.path.abspath(start_dir or os.getcwd())
+
+
+# Resolve to the DEVELOPER'S active project directory (cwd-based), NOT the
+# devmind package installation directory — otherwise .cognee_system/.cognee_data
+# get written inside site-packages and `devmind forget --all` would wipe every
+# project's memory at once instead of just the current one.
+project_root = get_project_root(os.getcwd())
 system_path = os.path.join(project_root, ".cognee_system")
 data_path = os.path.join(project_root, ".cognee_data")
+
+# Unified dataset name for all Architecture Decision Records logged via
+# `devmind log`, replacing the old per-decision `adr_decision_<timestamp>`
+# datasets so ADRs are cross-searchable within the project's memory namespace.
+ADR_DATASET_NAME = "devmind_adr_records"
 
 os.makedirs(system_path, exist_ok=True)
 os.makedirs(os.path.join(system_path, "databases"), exist_ok=True)
@@ -117,21 +143,6 @@ def _install_litellm_key_rotation(keys: list):
     
     litellm.acompletion = _rotating_acompletion
     logger.info(f"Installed litellm key rotation with {len(keys)} keys (interval: {_MIN_CALL_INTERVAL}s)")
-
-def get_project_root(start_dir: str = None) -> str:
-    """
-    Finds the nearest parent directory that contains a project marker (.git, .env, pyproject.toml, or setup.py).
-    Falls back to start_dir if none found.
-    """
-    curr = os.path.abspath(start_dir or os.getcwd())
-    while True:
-        if any(os.path.exists(os.path.join(curr, marker)) for marker in (".git", ".env", "pyproject.toml", "setup.py")):
-            return curr
-        parent = os.path.dirname(curr)
-        if parent == curr:
-            break
-        curr = parent
-    return os.path.abspath(start_dir or os.getcwd())
 
 def _get_global_config_path() -> pathlib.Path:
     """
@@ -536,6 +547,23 @@ async def get_all_dataset_names() -> list[str]:
         logger.warning(f"Could not fetch dataset names dynamically: {e}")
         return []
 
+NO_MEMORY_MESSAGE = (
+    "💡 No codebase memory found for this project.\n"
+    "Run 'devmind remember' first to index your files into memory (takes ~3 seconds)."
+)
+
+# Substrings that indicate a "missing dataset / never indexed" condition bubbling
+# up from Cognee's relational/vector engines, so we can translate them into
+# NO_MEMORY_MESSAGE instead of a raw stack trace.
+_MISSING_DATASET_ERROR_HINTS = (
+    "no such table",
+    "does not exist",
+    "dataset not found",
+    "'nonetype' object has no attribute",
+    "table not found",
+)
+
+
 async def recall_query(query: str) -> str:
     """
     Queries the Cognee memory graph using natural language.
@@ -561,16 +589,23 @@ async def recall_query(query: str) -> str:
             cognee.config.set_llm_api_key(gemini_key)
 
         logger.info(f"Recalling memory for query: '{query}'...")
-        
+
         # Target only the active project directory's unified dataset
         current_dir = get_project_root()
         folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
         target_dataset = f"devmind_{folder_name}"
-        
+
+        # Safe query guard: if this project has never been indexed, fail fast
+        # with a friendly hint instead of surfacing a raw SQLAlchemy/LanceDB
+        # "dataset not found" exception to the user.
+        existing_datasets = await get_all_dataset_names()
+        if target_dataset not in existing_datasets:
+            return NO_MEMORY_MESSAGE
+
         from cognee.modules.search.types import SearchType
         query_type = SearchType.RAG_COMPLETION
         top_k = int(os.getenv("DEVMIND_RECALL_TOP_K", "3"))
-        
+
         logger.info(f"Searching memory dataset '{target_dataset}' (top_k={top_k})...")
         results = None
         try:
@@ -609,6 +644,10 @@ async def recall_query(query: str) -> str:
             
         return "\n\n".join(formatted_results)
     except Exception as e:
+        err_str = str(e).lower()
+        if any(hint in err_str for hint in _MISSING_DATASET_ERROR_HINTS):
+            logger.warning(f"Recall failed with a missing-dataset style error for '{query}': {e}")
+            return NO_MEMORY_MESSAGE
         logger.error(f"Error during cognee.recall for query '{query}': {e}", exc_info=True)
         return f"Error recalling memory: {e}"
 

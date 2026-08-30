@@ -31,8 +31,12 @@ IGNORED_DIRS = {
 
 # Supported file extensions for codebase reading
 SUPPORTED_EXTENSIONS = {
-    ".py", ".md", ".txt", ".js", ".ts", ".html", ".css", 
-    ".json", ".yaml", ".yml", ".ini", ".toml", ".sh", ".bat"
+    ".py", ".md", ".txt", ".js", ".ts", ".html", ".css",
+    ".json", ".yaml", ".yml", ".ini", ".toml", ".sh", ".bat",
+    # Polyglot expansion: additional language extensions
+    ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp",
+    ".rb", ".php", ".swift", ".kt", ".kts", ".cs", ".scala",
+    ".sql", ".graphql",
 }
 
 # Individual configuration files to include even if they don't have standard extensions
@@ -149,10 +153,10 @@ def scan_codebase_files(root_dir: str) -> list[dict]:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                         content = f.read()
 
-                    # Skip empty or trivial files (e.g. empty __init__.py files)
-                    # to prevent LLM structured output validation failures in Cognee
+                    # Skip empty files, but keep short-but-meaningful config
+                    # scripts (e.g. "DEBUG=True") that a higher threshold would drop.
                     stripped_content = content.strip()
-                    if not stripped_content or len(stripped_content) < 15:
+                    if not stripped_content or len(stripped_content) < 3:
                         continue
 
                     content = scrub_secrets(content)
