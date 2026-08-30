@@ -219,6 +219,15 @@ def save_configuration(config_dict: Dict[str, Any], global_scope: bool = True) -
         return str(env_path)
 
 
+def _prompt_required_secret(console: Console, label: str) -> str:
+    """Prompts for a password-masked value, re-prompting until non-empty."""
+    while True:
+        value = Prompt.ask(label, password=True).strip()
+        if value:
+            return value
+        console.print("[bold red]This field cannot be empty — please enter a valid key.[/bold red]")
+
+
 def run_setup_wizard(console: Optional[Console] = None) -> bool:
     """
     Runs the interactive CLI setup wizard.
@@ -270,7 +279,7 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
     if choice == "1":
         provider_id = "groq"
         console.print("\n[dim]Get your free Groq API key at: https://console.groq.com/keys[/dim]")
-        api_key = Prompt.ask("[bold green]Enter your Groq API Key[/bold green]", password=True).strip()
+        api_key = _prompt_required_secret(console, "[bold green]Enter your Groq API Key[/bold green]")
         model = "groq/llama-3.3-70b-versatile"
         config_to_save = {
             "LLM_PROVIDER": "groq",
@@ -282,7 +291,7 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
     elif choice == "2":
         provider_id = "gemini"
         console.print("\n[dim]Get your free Gemini API key at: https://aistudio.google.com/app/apikey[/dim]")
-        api_key = Prompt.ask("[bold green]Enter your Google Gemini API Key[/bold green]", password=True).strip()
+        api_key = _prompt_required_secret(console, "[bold green]Enter your Google Gemini API Key[/bold green]")
         model = "gemini/gemini-2.0-flash"
         config_to_save = {
             "LLM_PROVIDER": "gemini",
@@ -294,7 +303,7 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
     elif choice == "3":
         provider_id = "anthropic"
         console.print("\n[dim]Get your Anthropic key at: https://console.anthropic.com/settings/keys[/dim]")
-        api_key = Prompt.ask("[bold green]Enter your Anthropic API Key[/bold green]", password=True).strip()
+        api_key = _prompt_required_secret(console, "[bold green]Enter your Anthropic API Key[/bold green]")
         model_choice = Prompt.ask(
             "Select Claude Model",
             choices=["claude-3-5-sonnet", "claude-3-5-haiku", "claude-3-7-sonnet"],
@@ -316,7 +325,7 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
     elif choice == "4":
         provider_id = "openai"
         console.print("\n[dim]Get your OpenAI API key at: https://platform.openai.com/api-keys[/dim]")
-        api_key = Prompt.ask("[bold green]Enter your OpenAI API Key[/bold green]", password=True).strip()
+        api_key = _prompt_required_secret(console, "[bold green]Enter your OpenAI API Key[/bold green]")
         model_choice = Prompt.ask(
             "Select OpenAI Model",
             choices=["gpt-4o-mini", "gpt-4o", "o3-mini"],
@@ -347,7 +356,7 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
     elif choice == "6":
         provider_id = "openrouter"
         console.print("\n[dim]Get your OpenRouter key at: https://openrouter.ai/keys[/dim]")
-        api_key = Prompt.ask("[bold green]Enter your OpenRouter API Key[/bold green]", password=True).strip()
+        api_key = _prompt_required_secret(console, "[bold green]Enter your OpenRouter API Key[/bold green]")
         model = Prompt.ask(
             "Enter OpenRouter model ID",
             default="openrouter/meta-llama/llama-3.3-70b-instruct"
@@ -392,8 +401,11 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
 
     # 3. Save Scope Selection
     console.print()
+    console.print("[bold]Where would you like to save this configuration?[/bold]")
+    console.print(f"  [1] Global — applies to all repositories ({get_global_config_path()})")
+    console.print("  [2] Local — this repository only (./.env)")
     scope_choice = Prompt.ask(
-        "Where would you like to save this configuration?",
+        "[bold cyan]Enter choice[/bold cyan]",
         choices=["1", "2"],
         default="1"
     )

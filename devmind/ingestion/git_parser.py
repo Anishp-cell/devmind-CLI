@@ -4,6 +4,11 @@ from git import Repo
 
 logger = logging.getLogger("devmind.git_parser")
 
+
+def is_git_repo(repo_path: str) -> bool:
+    """Returns True if repo_path (or an ancestor) contains a .git directory."""
+    return os.path.exists(os.path.join(repo_path, ".git"))
+
 def get_git_history(repo_path: str, max_commits: int = 50) -> list[str]:
     """
     Scans the local git history of the project at repo_path.
@@ -115,6 +120,12 @@ def get_changed_files_git_diff(repo_path: str) -> set[str]:
                 if commit.parents:
                     for item in commit.parents[0].diff(commit):
                         p = item.b_path or item.a_path
+                        if p:
+                            changed_files.add(p.replace("\\", "/"))
+                else:
+                    # Root commit has no parent to diff against — every file
+                    # it introduced counts as "changed" for incremental mode.
+                    for p in commit.stats.files.keys():
                         if p:
                             changed_files.add(p.replace("\\", "/"))
             except Exception:

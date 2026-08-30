@@ -18,7 +18,7 @@ if sys.platform == 'win32':
 
 from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes, get_project_root
 from devmind.ingestion.file_reader import scan_codebase_files
-from devmind.ingestion.git_parser import get_git_history, get_changed_files_git_diff
+from devmind.ingestion.git_parser import get_git_history, get_changed_files_git_diff, is_git_repo
 from devmind.ingestion.comment_extractor import get_codebase_comments
 from devmind.version_checker import show_update_notification
 import atexit
@@ -136,6 +136,12 @@ async def remember_pipeline(directory: str, incremental: bool = False, deep: boo
         return
 
     if incremental:
+        if not is_git_repo(directory):
+            typer.echo(
+                "[Warning] Incremental mode requires a git repository, but none was found here.\n"
+                "Run 'git init' first, or drop --incremental to do a full scan."
+            )
+            return
         changed_paths = get_changed_files_git_diff(directory)
         if changed_paths:
             files = [f for f in files if f["relative_path"].replace("\\", "/") in changed_paths]
@@ -423,6 +429,9 @@ def dashboard(
     """
     import uvicorn
     abs_dir = os.path.abspath(directory)
+    if not os.path.isdir(abs_dir):
+        typer.echo(f"[Error] Directory not found: {abs_dir}")
+        raise typer.Exit(code=1)
     os.chdir(abs_dir)
     typer.echo(f"Starting DevMind Web UI Dashboard on http://localhost:{port} targeting '{abs_dir}' ...")
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
@@ -447,11 +456,29 @@ def graph(
     """
     import uvicorn
     import webbrowser
+    import socket
+    import threading
+    import time
+
     abs_dir = os.path.abspath(directory)
+    if not os.path.isdir(abs_dir):
+        typer.echo(f"[Error] Directory not found: {abs_dir}")
+        raise typer.Exit(code=1)
     os.chdir(abs_dir)
     url = f"http://localhost:{port}/#graph"
+
+    def _open_browser_when_ready():
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                    break
+            except OSError:
+                time.sleep(0.2)
+        webbrowser.open(url)
+
     typer.echo(f"Opening interactive codebase graph at {url} ...")
-    webbrowser.open(url)
+    threading.Thread(target=_open_browser_when_ready, daemon=True).start()
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
 
 @app.command()
@@ -1140,6 +1167,10 @@ def blame(
 
     if not os.path.exists(os.path.join(root_dir, relative_path)):
         typer.echo(f"[Error] File not found: {file_path}")
+        raise typer.Exit(code=1)
+
+    if not is_git_repo(root_dir):
+        typer.echo(f"[Error] '{root_dir}' is not a git repository. Semantic blame requires git history.")
         raise typer.Exit(code=1)
 
     console = Console()

@@ -82,6 +82,12 @@ class SecretScanner:
         findings: List[SecurityFinding] = []
         normalized_path = rel_path.replace("\\", "/").lower()
         parts = normalized_path.split("/")
+        filename = pathlib.Path(rel_path).name.lower()
+        # Template/example env files (.env.example, .env.sample, config.example.*) are
+        # never real secrets — skip them outright rather than relying on placeholder
+        # substring matching, which misses values like "your_key1" (underscore, not "your-").
+        if filename in (".env.example", ".env.sample", ".env.template") or filename.endswith((".example", ".sample")):
+            return findings
         is_test_file = (
             "tests" in parts
             or "test" in parts
@@ -98,8 +104,11 @@ class SecretScanner:
             if not clean_line or clean_line.startswith(("#", "//", "/*", "*")):
                 continue
 
-            # 1. Regex Pattern Matching
+            # 1. Regex Pattern Matching (skipped for test/fixture/mock files —
+            # those routinely contain fake keys that match real-looking patterns)
             for rule in SECRET_PATTERNS:
+                if is_test_file:
+                    break
                 pattern = rule.get("pattern", "")
                 if not pattern:
                     continue
