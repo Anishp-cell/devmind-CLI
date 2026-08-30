@@ -298,6 +298,41 @@ def get_random_gemini_key() -> str:
     logger.info(f"Rotating Gemini LLM request key -> {masked}")
     return selected_key
 
+
+def ensure_gitignore_entries():
+    """
+    Appends .cognee_system/, .cognee_data/, and .cognee_cache/ to the
+    project's .gitignore if it exists and doesn't already cover them —
+    the local memory index can be several MB and shouldn't be committed.
+    Only touches an existing .gitignore; never creates one unprompted.
+    """
+    gitignore_path = os.path.join(project_root, ".gitignore")
+    if not os.path.exists(gitignore_path):
+        return
+
+    required = [".cognee_system/", ".cognee_data/", ".cognee_cache/"]
+    try:
+        with open(gitignore_path, "r", encoding="utf-8", errors="ignore") as f:
+            existing_content = f.read()
+    except OSError:
+        return
+
+    existing_lines = {line.strip().rstrip("/") for line in existing_content.splitlines()}
+    missing = [entry for entry in required if entry.rstrip("/") not in existing_lines]
+    if not missing:
+        return
+
+    try:
+        with open(gitignore_path, "a", encoding="utf-8") as f:
+            if existing_content and not existing_content.endswith("\n"):
+                f.write("\n")
+            f.write("\n# Added by DevMind — local memory index, do not commit\n")
+            for entry in missing:
+                f.write(f"{entry}\n")
+        logger.info(f"Added {missing} to .gitignore.")
+    except OSError as e:
+        logger.warning(f"Could not update .gitignore with DevMind entries: {e}")
+
 def initialize_cognee():
     """
     Loads configuration from .env and verifies LLM & Embedding provider setup.
@@ -351,7 +386,10 @@ def initialize_cognee():
     # Apply storage paths to Cognee configuration
     cognee.config.system_root_directory(system_path)
     cognee.config.data_root_directory(data_path)
-    
+
+    ensure_gitignore_entries()
+
+
     llm_provider = os.getenv("LLM_PROVIDER", "groq").lower()
     embedding_provider = os.getenv("EMBEDDING_PROVIDER", "fastembed").lower()
     
