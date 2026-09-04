@@ -72,9 +72,9 @@ def render_hero_banner(project_dir: str = ".") -> None:
     model = os.getenv("LLM_MODEL") or cfg.get("LLM_MODEL", "Not Set")
 
     if provider.lower() != "none":
-        prov_badge = f"[bold green]✦ {provider.upper()}[/bold green] [dim]({model})[/dim]"
+        prov_badge = f"[bold green][{provider.upper()}][/bold green] [dim]({model})[/dim]"
     else:
-        prov_badge = "[yellow]✦ Offline Mode[/yellow] [dim](run /init to connect)[/dim]"
+        prov_badge = "[yellow][Offline Mode][/yellow] [dim](run /init to connect)[/dim]"
 
     # Quick count of indexable files
     try:
@@ -93,7 +93,7 @@ def render_hero_banner(project_dir: str = ".") -> None:
         f"[bold]Memory:[/bold] [green]LanceDB 384-d[/green]\n"
         f" [bold]Active AI:[/bold] {prov_badge}\n"
         f" [dim]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim]\n"
-        f" [dim]💡 Ask any question in plain English, or type [bold cyan]/help[/bold cyan] for all 14 tools[/dim]"
+        f" [dim]Ask any question in plain English, or type [bold cyan]/help[/bold cyan] for all 14 tools[/dim]"
     )
 
     console.print(Panel(
@@ -171,12 +171,12 @@ def render_doctor_diagnostics(project_dir: str = ".") -> bool:
 
     passed_count = sum(1 for _, st, _ in checks if "PASS" in st)
     all_ok = (passed_count == len(checks))
-    verdict = "[bold green]ALL CLEAR — System is fully operational[/bold green]" if all_ok else "[bold yellow]HEALTHY — Minor optional items flagged[/bold yellow]"
+    verdict = "[bold green]ALL CLEAR -- System is fully operational[/bold green]" if all_ok else "[bold yellow]HEALTHY -- Minor optional items flagged[/bold yellow]"
 
     console.print()
     console.print(Panel(
         table,
-        title=f"[bold cyan]✦[/bold cyan] DevMind System & Environment Diagnostics  ({passed_count}/{len(checks)} Passed)",
+        title=f"DevMind System & Environment Diagnostics  ({passed_count}/{len(checks)} Passed)",
         border_style="green" if all_ok else "yellow",
         subtitle=verdict
     ))
@@ -212,7 +212,7 @@ def render_help_menu() -> None:
     table.add_row("/exit    (/quit)", "Exit DevMind CLI", "Utility")
 
     console.print()
-    console.print(Panel(table, title="[bold magenta]⚡ DevMind Commands & Capabilities[/bold magenta]", border_style="cyan"))
+    console.print(Panel(table, title="[bold magenta]DevMind Commands & Capabilities[/bold magenta]", border_style="cyan"))
     console.print()
 
 
@@ -257,13 +257,41 @@ def show_interactive_tools_menu(project_dir: str) -> None:
     dispatch_tool_by_number(choice, project_dir)
 
 
+def ensure_web_server_running(host: str = "127.0.0.1", port: int = 8000) -> bool:
+    """Ensure the DevMind FastAPI web server is running in a background daemon thread."""
+    import socket
+    import threading
+    import time
+
+    def is_running():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            return s.connect_ex((host, port)) == 0
+
+    if is_running():
+        return True
+
+    def _run():
+        import uvicorn
+        uvicorn.run("devmind.web.app:app", host=host, port=port, log_level="warning")
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+
+    for _ in range(25):
+        time.sleep(0.1)
+        if is_running():
+            return True
+    return False
+
+
 def dispatch_tool_by_number(choice: str, project_dir: str) -> None:
     """Executes a tool selected from the numbered menu."""
     from devmind.cli import run_async
 
     if choice == "1":
         from devmind.analysis.health import run_health_analysis
-        with console.status("[bold cyan]🔬 Scanning codebase health...[/bold cyan]", spinner="dots"):
+        with console.status("[bold cyan]Scanning codebase health...[/bold cyan]", spinner="dots"):
             report = run_health_analysis(project_dir)
         console.print(f"\n[bold]Health Score:[/bold] {report.health_score}/100 (Grade: {report.grade})")
         console.print(f"Files: {report.total_files} │ Functions: {report.total_functions} │ Classes: {report.total_classes} │ Lines: {report.total_lines:,}\n")
@@ -279,19 +307,19 @@ def dispatch_tool_by_number(choice: str, project_dir: str) -> None:
 
     elif choice == "3":
         from devmind.analysis.secure import run_security_analysis
-        with console.status("[bold cyan]🔒 Running offline security audit...[/bold cyan]", spinner="dots"):
+        with console.status("[bold cyan]Running offline security audit...[/bold cyan]", spinner="dots"):
             report = run_security_analysis(project_dir)
         console.print(f"\n[bold]Security Grade:[/bold] {report.risk_grade} ({report.risk_score}/100) │ Findings: {len(report.findings)}")
         console.print(f"Critical: {report.critical_count} │ High: {report.high_count} │ Medium: {report.medium_count} │ Low: {report.low_count}\n")
 
     elif choice == "4":
         from devmind.analysis.onboarding import generate_onboarding_report, format_onboarding_markdown
-        with console.status("[bold cyan]🚀 Generating onboarding guide...[/bold cyan]", spinner="dots"):
+        with console.status("[bold cyan]Generating onboarding guide...[/bold cyan]", spinner="dots"):
             report = generate_onboarding_report(project_dir)
             md = format_onboarding_markdown(report)
             with open(os.path.join(project_dir, "ONBOARDING.md"), "w", encoding="utf-8") as f:
                 f.write(md)
-        console.print(f"\n[bold green]✅ Onboarding guide generated at ONBOARDING.md[/bold green] ({report.total_files} files scanned)\n")
+        console.print(f"\n[bold green][OK] Onboarding guide generated at ONBOARDING.md[/bold green] ({report.total_files} files scanned)\n")
 
     elif choice == "5":
         from devmind.analysis.drift import run_drift_analysis, render_drift_terminal
@@ -316,7 +344,7 @@ def dispatch_tool_by_number(choice: str, project_dir: str) -> None:
         from devmind.memory import initialize_cognee
         initialize_cognee()
         run_async(remember_pipeline(project_dir, deep=deep))
-        console.print("[bold green]✅ Memory ingestion completed.[/bold green]\n")
+        console.print("[bold green][OK] Memory ingestion completed.[/bold green]\n")
 
     elif choice == "9":
         from devmind.config_wizard import inspect_and_switch_config
@@ -335,20 +363,21 @@ def dispatch_tool_by_number(choice: str, project_dir: str) -> None:
             tagged = f"Architectural Decision Record:\n{decision}"
             ds_name = f"adr_decision_{int(time.time())}"
             run_async(remember_content(tagged, dataset_name=ds_name))
-            console.print("[bold green]✅ Architectural decision logged into memory.[/bold green]\n")
+            console.print("[bold green][OK] Architectural decision logged into memory.[/bold green]\n")
 
     elif choice == "12":
         from devmind.web.app import build_codebase_graph_data
         data = build_codebase_graph_data(project_dir)
         stats = data["stats"]
-        console.print(f"[bold green]✅ Architecture digest ready:[/bold green] {stats['total_files']} files, {stats['total_classes']} classes, {stats['total_funcs']} functions.")
+        console.print(f"[bold green][OK] Architecture digest ready:[/bold green] {stats['total_files']} files, {stats['total_classes']} classes, {stats['total_funcs']} functions.")
         out = os.path.join(project_dir, "DEV_MINDMAP.md")
         console.print(f"[dim]Generated at: {out}[/dim]\n")
 
     elif choice == "13":
         import webbrowser
         url = "http://localhost:8000/#graph"
-        console.print(f"[bold cyan]Opening visual graph in browser at {url} ...[/bold cyan]")
+        console.print(f"[bold cyan]Starting local web server and opening visual graph at {url} ...[/bold cyan]")
+        ensure_web_server_running()
         webbrowser.open(url)
 
     elif choice == "14":
@@ -358,14 +387,14 @@ def dispatch_tool_by_number(choice: str, project_dir: str) -> None:
                 from devmind.memory import system_path, data_path
                 shutil.rmtree(system_path, ignore_errors=True)
                 shutil.rmtree(data_path, ignore_errors=True)
-                console.print("[bold green]✅ Memory databases completely wiped.[/bold green]\n")
+                console.print("[bold green][OK] Memory databases completely wiped.[/bold green]\n")
         elif mode == "forget-file":
             target_f = Prompt.ask("Enter relative path to forget").strip()
             if target_f:
                 from devmind.memory import initialize_cognee, forget_file_nodes
                 initialize_cognee()
                 run_async(forget_file_nodes(target_f))
-                console.print(f"[bold green]✅ File '{target_f}' removed from memory.[/bold green]\n")
+                console.print(f"[bold green][OK] File '{target_f}' removed from memory.[/bold green]\n")
 
 
 def run_interactive_cli(project_dir: str = ".") -> None:
@@ -389,7 +418,7 @@ def run_interactive_cli(project_dir: str = ".") -> None:
     while True:
         try:
             # Modern prompt with branch tag
-            prompt_label = f"\n[bold cyan]devmind[/bold cyan] [dim][{branch}][/dim] [bold green]❯[/bold green] "
+            prompt_label = f"\n[bold cyan]devmind[/bold cyan] [dim][{branch}][/dim] [bold green]>[/bold green] "
             user_input = Prompt.ask(prompt_label).strip()
 
             if not user_input:
@@ -424,7 +453,7 @@ def run_interactive_cli(project_dir: str = ".") -> None:
 
                 if cmd_name in ["health", "h"]:
                     from devmind.analysis.health import run_health_analysis
-                    with console.status("[bold cyan]🔬 Scanning codebase health...[/bold cyan]", spinner="dots"):
+                    with console.status("[bold cyan]Scanning codebase health...[/bold cyan]", spinner="dots"):
                         report = run_health_analysis(resolved_dir)
                     console.print(f"\n[bold]Health Score:[/bold] {report.health_score}/100 (Grade: {report.grade})")
                     console.print(f"Files: {report.total_files} │ Functions: {report.total_functions} │ Classes: {report.total_classes} │ Lines: {report.total_lines:,}")
@@ -452,7 +481,7 @@ def run_interactive_cli(project_dir: str = ".") -> None:
 
                 elif cmd_name in ["secure", "s"]:
                     from devmind.analysis.secure import run_security_analysis
-                    with console.status("[bold cyan]🔒 Running offline security audit...[/bold cyan]", spinner="dots"):
+                    with console.status("[bold cyan]Running offline security audit...[/bold cyan]", spinner="dots"):
                         report = run_security_analysis(resolved_dir)
                     console.print(f"\n[bold]Security Grade:[/bold] {report.risk_grade} ({report.risk_score}/100) │ Findings: {len(report.findings)}")
                     console.print(f"Critical: {report.critical_count} │ High: {report.high_count} │ Medium: {report.medium_count} │ Low: {report.low_count}")
@@ -464,13 +493,13 @@ def run_interactive_cli(project_dir: str = ".") -> None:
 
                 elif cmd_name in ["onboard", "o"]:
                     from devmind.analysis.onboarding import generate_onboarding_report, format_onboarding_markdown
-                    with console.status("[bold cyan]🚀 Generating onboarding guide...[/bold cyan]", spinner="dots"):
+                    with console.status("[bold cyan]Generating onboarding guide...[/bold cyan]", spinner="dots"):
                         report = generate_onboarding_report(resolved_dir)
                         md = format_onboarding_markdown(report)
                         out_file = os.path.join(resolved_dir, "ONBOARDING.md")
                         with open(out_file, "w", encoding="utf-8") as f:
                             f.write(md)
-                    console.print(f"[bold green]✨ Onboarding guide generated at ONBOARDING.md[/bold green]\n")
+                    console.print(f"[bold green][OK] Onboarding guide generated at ONBOARDING.md[/bold green]\n")
                     continue
 
                 elif cmd_name in ["drift", "d"]:
@@ -504,7 +533,7 @@ def run_interactive_cli(project_dir: str = ".") -> None:
                     from devmind.cli import remember_pipeline
                     initialize_cognee()
                     run_async(remember_pipeline(resolved_dir, deep=deep))
-                    console.print("[bold green]✨ Codebase remembered into local LanceDB memory.[/bold green]\n")
+                    console.print("[bold green][OK] Codebase remembered into local LanceDB memory.[/bold green]\n")
                     continue
 
                 elif cmd_name in ["config", "c"]:
@@ -527,20 +556,21 @@ def run_interactive_cli(project_dir: str = ".") -> None:
                         tagged = f"Architectural Decision Record:\n{decision}"
                         ds_name = f"adr_decision_{int(time.time())}"
                         run_async(remember_content(tagged, dataset_name=ds_name))
-                        console.print("[bold green]✅ Architectural decision logged into memory.[/bold green]\n")
+                        console.print("[bold green][OK] Architectural decision logged into memory.[/bold green]\n")
                     continue
 
                 elif cmd_name == "digest":
                     from devmind.web.app import build_codebase_graph_data
                     data = build_codebase_graph_data(resolved_dir)
                     stats = data["stats"]
-                    console.print(f"[bold green]✅ Architecture digest ready:[/bold green] {stats['total_files']} files, {stats['total_classes']} classes, {stats['total_funcs']} functions.")
+                    console.print(f"[bold green][OK] Architecture digest ready:[/bold green] {stats['total_files']} files, {stats['total_classes']} classes, {stats['total_funcs']} functions.")
                     continue
 
                 elif cmd_name == "graph":
                     import webbrowser
                     url = "http://localhost:8000/#graph"
-                    console.print(f"[bold cyan]Opening visual graph in browser at {url} ...[/bold cyan]")
+                    console.print(f"[bold cyan]Starting local web server and opening visual graph in browser at {url} ...[/bold cyan]")
+                    ensure_web_server_running()
                     webbrowser.open(url)
                     continue
 
@@ -552,7 +582,7 @@ def run_interactive_cli(project_dir: str = ".") -> None:
                     ds_name = f"devmind_{folder_name}"
                     run_async(remember_pipeline(resolved_dir))
                     run_async(improve_memory(dataset_name=ds_name))
-                    console.print("[bold green]✅ Memory refresh and relationship refinement completed.[/bold green]\n")
+                    console.print("[bold green][OK] Memory refresh and relationship refinement completed.[/bold green]\n")
                     continue
 
                 elif cmd_name == "forget":
@@ -561,13 +591,13 @@ def run_interactive_cli(project_dir: str = ".") -> None:
                         if Confirm.ask("[bold red]Wipe all memory databases?[/bold red]", default=False):
                             shutil.rmtree(system_path, ignore_errors=True)
                             shutil.rmtree(data_path, ignore_errors=True)
-                            console.print("[bold green]✅ Memory databases wiped.[/bold green]\n")
+                            console.print("[bold green][OK] Memory databases wiped.[/bold green]\n")
                     else:
                         file_to_forget = cmd_arg or Prompt.ask("Relative path to forget").strip()
                         if file_to_forget:
                             initialize_cognee()
                             run_async(forget_file_nodes(file_to_forget))
-                            console.print(f"[bold green]✅ File '{file_to_forget}' removed from memory.[/bold green]\n")
+                            console.print(f"[bold green][OK] File '{file_to_forget}' removed from memory.[/bold green]\n")
                     continue
 
                 else:
@@ -580,13 +610,13 @@ def run_interactive_cli(project_dir: str = ".") -> None:
                 continue
 
             initialize_cognee()
-            with console.status("[bold cyan]⠋ Searching memory & reasoning across codebase...[/bold cyan]", spinner="dots"):
+            with console.status("[bold cyan]Searching memory & reasoning across codebase...[/bold cyan]", spinner="dots"):
                 answer = run_async(recall_query(user_input))
 
             console.print()
             console.print(Panel(
                 Markdown(answer),
-                title="[bold magenta]🧠 DevMind Intelligence[/bold magenta]",
+                title="[bold magenta]DevMind Intelligence[/bold magenta]",
                 border_style="cyan",
                 box=box.ROUNDED,
                 padding=(1, 2)
@@ -597,3 +627,4 @@ def run_interactive_cli(project_dir: str = ".") -> None:
             break
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {str(e)}")
+
