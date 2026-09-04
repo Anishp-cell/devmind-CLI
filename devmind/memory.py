@@ -538,81 +538,169 @@ async def get_all_dataset_names() -> list[str]:
 
 async def recall_query(query: str) -> str:
     """
-    Queries the Cognee memory graph using natural language.
+    Queries the Cognee memory graph and AST codebase index using natural language.
     """
+    current_dir = get_project_root()
+    folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
+    target_dataset = f"devmind_{folder_name}"
+
+    ast_matches = []
     try:
-        # Rotate API key if we are on custom/groq rotation
-        if os.getenv("DEVMIND_ROTATION_ACTIVE") == "true":
-            groq_key, endpoint, model = get_random_api_key()
-            if not groq_key:
-                return "Error: No API keys found. Please set GROQ_API_KEYS or GROQ_API_KEY before querying."
+        from devmind.ingestion.file_reader import scan_codebase_files
+        files = scan_codebase_files(current_dir)
+        query_keywords = [w for w in query.lower().split() if len(w) > 2 and w not in ("where", "are", "defined", "the", "what", "how", "this", "that", "does", "work")]
+        
+        for f in files:
+            rel_path = f.get("relative_path", "").replace("\\", "/")
+            content = f.get("content", "")
+            content_lower = content.lower()
             
-            os.environ["LLM_API_KEY"] = groq_key
-            os.environ["LLM_ENDPOINT"] = endpoint
-            cognee.config.set_llm_endpoint(endpoint)
-            cognee.config.set_llm_api_key(groq_key)
-            cognee.config.set_llm_model(model)
-        elif os.getenv("DEVMIND_GEMINI_ROTATION_ACTIVE") == "true":
-            gemini_key = get_random_gemini_key()
-            if not gemini_key:
-                return "Error: No Gemini API keys found. Please set GEMINI_API_KEYS or GEMINI_API_KEY before querying."
-            os.environ["LLM_API_KEY"] = gemini_key
-            os.environ["CUSTOM_API_KEY"] = gemini_key
-            cognee.config.set_llm_api_key(gemini_key)
+            # Prioritize source files and direct name matches
+            score = sum(3 if kw in rel_path.lower() else (1 if kw in content_lower else 0) for kw in query_keywords)
+            if score > 0:
+                # Find clean matching lines (skip import walls and license boilerplate)
+                matching_lines = []
+                for line in content.splitlines():
+                    sline = line.strip()
+                    if any(kw in sline.lower() for kw in query_keywords):
+                        if not (sline.startswith("import ") or sline.startswith("from ") or sline.startswith("#")):
+                            clean_sline = "".join(c for c in sline if ord(c) < 0xFFFF)
+                            matching_lines.append(clean_sline)
+                    if len(matching_lines) >= 3:
+                        break
 
-        logger.info(f"Recalling memory for query: '{query}'...")
-        
-        # Target only the active project directory's unified dataset
-        current_dir = get_project_root()
-        folder_name = os.path.basename(os.path.abspath(current_dir)).lower().replace("-", "_").replace(" ", "_")
-        target_dataset = f"devmind_{folder_name}"
-        
+                snippet = "\n".join(matching_lines) if matching_lines else "".join(c for c in content[:180].strip() if ord(c) < 0xFFFF)
+
+                # Extract matching functions or classes
+                funcs = []
+                for line in content.splitlines():
+                    sline = line.strip()
+                    if sline.startswith("def ") or sline.startswith("class "):
+                        name = sline.split("(")[0].split(":")[0].replace("def ", "").replace("class ", "").strip()
+                        if any(kw in name.lower() for kw in query_keywords):
+                            funcs.append(f"`{name}()`")
+                    if len(funcs) >= 3:
+                        break
+
+                ast_matches.append({
+                    "score": score,
+                    "rel_path": rel_path,
+                    "snippet": snippet,
+                    "funcs": funcs
+                })
+
+        ast_matches.sort(key=lambda x: x["score"], reverse=True)
+    except Exception as fe:
+        logger.warning(f"AST search error: {fe}")
+
+    # Cognee Recall with timeout
+    try:
         from cognee.modules.search.types import SearchType
-        query_type = SearchType.RAG_COMPLETION
         top_k = int(os.getenv("DEVMIND_RECALL_TOP_K", "3"))
-        
-        logger.info(f"Searching memory dataset '{target_dataset}' (top_k={top_k})...")
-        results = None
-        try:
-            results = await cognee.recall(query_text=query, query_type=query_type, datasets=[target_dataset], top_k=top_k)
-        except Exception as ex:
-            logger.warning(f"Primary RAG recall failed ({ex}). Attempting fallback vector chunk recall...")
-            try:
-                results = await cognee.recall(query_text=query, query_type=SearchType.CHUNKS, top_k=top_k)
-            except Exception as ex2:
-                logger.warning(f"Fallback chunk recall failed: {ex2}")
-                results = []
+        results = await asyncio.wait_for(
+            cognee.recall(query_text=query, query_type=SearchType.RAG_COMPLETION, datasets=[target_dataset], top_k=top_k),
+            timeout=2.0
+        )
+        if results:
+            cognee_texts = [str(r.text if hasattr(r, "text") else r) for r in results if r]
+            if cognee_texts:
+                return "\n\n".join(cognee_texts)
+    except Exception:
+        pass
 
-        if not results:
-            return "No relevant memories found in codebase index."
-        
-        # Cognee returns a list of result objects or dictionaries. 
-        # Format the output cleanly for console display by deduplicating identical or fallback responses.
-        formatted_results = []
-        seen_texts = set()
-        for index, result in enumerate(results, start=1):
-            if hasattr(result, "text"):
-                val = result.text
-            elif isinstance(result, dict) and "text" in result:
-                val = result["text"]
-            else:
-                val = str(result)
-            
-            # Normalize whitespace and casing for reliable duplication checks
-            normalized = " ".join(val.strip().lower().split())
-            if normalized and normalized != "got it." and normalized not in seen_texts:
-                seen_texts.add(normalized)
-                formatted_results.append(val)
-                
-        if not formatted_results:
-            return "No relevant memories found."
-            
-        return "\n\n".join(formatted_results)
-    except Exception as e:
-        logger.error(f"Error during cognee.recall for query '{query}': {e}", exc_info=True)
-        return f"Error recalling memory: {e}"
+    if ast_matches:
+        top_items = ast_matches[:4]
+
+        # 1. Attempt LLM natural language synthesis in simple English if configured
+        try:
+            from devmind.config_wizard import load_global_config
+            cfg = load_global_config() or {}
+
+            provider = (os.getenv("LLM_PROVIDER") or cfg.get("LLM_PROVIDER") or cfg.get("provider", "")).lower()
+            model = os.getenv("LLM_MODEL") or cfg.get("LLM_MODEL") or cfg.get("model", "")
+
+            # Resolve API key
+            api_key = (
+                os.getenv("GROQ_API_KEY") or cfg.get("GROQ_API_KEY") or
+                os.getenv("GEMINI_API_KEY") or cfg.get("GEMINI_API_KEY") or
+                os.getenv("ANTHROPIC_API_KEY") or cfg.get("ANTHROPIC_API_KEY") or
+                os.getenv("OPENAI_API_KEY") or cfg.get("OPENAI_API_KEY") or
+                os.getenv("OPENROUTER_API_KEY") or cfg.get("OPENROUTER_API_KEY") or
+                cfg.get("api_key", "")
+            )
+
+            # If provider is ollama or has an API key
+            if (provider == "ollama" and model) or api_key:
+                import litellm
+                if not model:
+                    if provider == "groq":
+                        model = "groq/llama-3.3-70b-versatile"
+                    elif provider == "gemini":
+                        model = "gemini/gemini-2.0-flash"
+                    elif provider == "anthropic":
+                        model = "anthropic/claude-3-5-sonnet-20241022"
+                    elif provider == "openai":
+                        model = "openai/gpt-4o-mini"
+                    elif provider == "ollama":
+                        model = "ollama/llama3.2"
+                    else:
+                        model = "gemini/gemini-2.0-flash"
+
+                context_blocks = []
+                for item in top_items:
+                    context_blocks.append(f"File: {item['rel_path']}\nSnippet:\n{item['snippet']}")
+                context_str = "\n\n---\n\n".join(context_blocks)
+
+                prompt_messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are DevMind, a helpful and knowledgeable software engineering assistant. "
+                            "Answer the developer's question in clear, simple, easy-to-understand plain English. "
+                            "Explain the key concepts clearly and concisely with short bullet points and brief code examples if helpful. "
+                            "Never dump raw tables of symbols or lists of imports. "
+                            "Make your explanation intuitive, structured, and easy for any engineer to read immediately."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Codebase Context:\n{context_str}\n\nDeveloper Question: {query}"
+                    }
+                ]
+
+                res = await asyncio.wait_for(
+                    litellm.acompletion(model=model, api_key=api_key if api_key else None, messages=prompt_messages),
+                    timeout=6.0
+                )
+                ai_text = res.choices[0].message.content.strip()
+                if ai_text:
+                    sources = ", ".join([f"`{item['rel_path']}`" for item in top_items])
+                    return f"{ai_text}\n\n---\n[dim]Sources: {sources}[/dim]"
+        except Exception as e:
+            logger.warning(f"LLM synthesis fallback: {e}")
+
+        # 2. Clean, Simple English Offline Summary (Fallback)
+        summary_lines = [
+            f"### Codebase Overview: \"{query}\"\n",
+            "Here are the key files and functions in your codebase that implement this:\n"
+        ]
+
+        for item in top_items:
+            funcs_str = f" (Symbols: {', '.join(item['funcs'])})" if item['funcs'] else ""
+            summary_lines.append(f"- **`{item['rel_path']}`**{funcs_str}")
+            if item['snippet']:
+                summary_lines.append(f"```python\n{item['snippet']}\n```")
+            summary_lines.append("")
+
+        summary_lines.append("---")
+        summary_lines.append("[dim]Tip: To get full conversational explanations synthesized by AI, run [/dim][bold cyan]/init[/bold cyan][dim] to connect a free Gemini or Groq model in 30 seconds.[/dim]")
+        return "\n".join(summary_lines)
+
+    return "No relevant files or symbols found in the codebase index matching your query."
+
 
 async def improve_memory(dataset_name: str) -> bool:
+
     """
     Re-enriches and prunes relationships for a given dataset in Cognee.
     """

@@ -1,4 +1,4 @@
-# 🚀 Onboarding Guide: Cognee Hackahton
+# 🚀 Onboarding Guide: devmind
 
 > *Generated automatically by DevMind CLI (`devmind onboard`)*
 
@@ -36,13 +36,13 @@ The following files are the most central and imported modules in the codebase. S
 | File | Role / Summary | Key Classes / Functions |
 |---|---|---|
 | [`devmind/memory.py`](devmind/memory.py) | Exports key functions: mark_key_cooldown, get_active_keys, _install_litellm_key_rotation | `def mark_key_cooldown()`, `def get_active_keys()` |
+| [`devmind/analysis/secure_patterns.py`](devmind/analysis/secure_patterns.py) | devmind/analysis/secure_patterns.py | `def calculate_shannon_entropy()` |
 | [`devmind/analysis/health.py`](devmind/analysis/health.py) | devmind/analysis/health.py | `class FunctionComplexity`, `class CodeSmell`, `def _compute_cyclomatic_complexity()`, `def analyze_complexity()` |
 | [`devmind/analysis/onboarding.py`](devmind/analysis/onboarding.py) | devmind/analysis/onboarding.py | `class ProjectStack`, `class SetupCommands`, `def detect_project_stack()`, `def extract_setup_commands()` |
+| [`devmind/analysis/secure.py`](devmind/analysis/secure.py) | devmind/analysis/secure.py | `class SecurityFinding`, `class SecurityReport`, `def format_secure_markdown()`, `def run_security_analysis()` |
+| [`devmind/version_checker.py`](devmind/version_checker.py) | devmind/version_checker.py | `def get_cache_file_path()`, `def parse_version_tuple()` |
+| [`devmind/analysis/drift.py`](devmind/analysis/drift.py) | Architecture Drift & Churn Detector. | `def _file_to_module()`, `def pathlib_parts()` |
 | [`devmind/ingestion/ast_parser.py`](devmind/ingestion/ast_parser.py) | DevMind AST Parser: Deterministic local code symbol extraction. | `def parse_python_ast()`, `def parse_generic_code_symbols()` |
-| [`devmind/config_wizard.py`](devmind/config_wizard.py) | devmind/config_wizard.py | `def get_global_config_path()`, `def load_global_config()` |
-| [`devmind/ingestion/git_parser.py`](devmind/ingestion/git_parser.py) | Exports key functions: get_git_history, get_changed_files_git_diff | `def get_git_history()`, `def get_changed_files_git_diff()` |
-| [`devmind/cli.py`](devmind/cli.py) | Exports key functions: run_async, remember_pipeline, remember | `def run_async()`, `def remember_pipeline()` |
-| [`devmind/web/app.py`](devmind/web/app.py) | Exports key functions: read_index, api_ask, api_log | `def read_index()`, `def api_ask()` |
 
 ---
 
@@ -52,7 +52,7 @@ Keep these areas in mind when contributing or refactoring:
 
 | Type | Location | Notes |
 |---|---|---|
-| **FIXME** | `ONBOARDING.md:L55` | ...') | |
+| **FIXME** | `ONBOARDING.md:L56` | ...') | |
 | **TODO** | `devmind/analysis/health.py:L259` | ...' or '// FIXME ...') |
 | **FIXME** | `examples/demo_project/main.py:L16` | Deduplicate cart_items before processing |
 | **TODO** | `examples/demo_project/utils.py:L8` | Add international phone format validations |

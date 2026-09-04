@@ -15,6 +15,13 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # Suppress Windows proactor event loop SSL bugs during shutdown
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from devmind.memory import initialize_cognee, remember_content, recall_query, improve_memory, forget_memory, forget_file_nodes, get_project_root
 from devmind.ingestion.file_reader import scan_codebase_files
@@ -88,6 +95,27 @@ app = typer.Typer(
     help="DevMind – Codebase Memory for Developers. Powered by Cognee.",
     add_completion=False
 )
+
+@app.callback(invoke_without_command=True)
+def main_entry(
+    ctx: typer.Context,
+    version: Optional[bool] = typer.Option(None, "--version", "-v", help="Show DevMind version and exit.", is_eager=True)
+):
+    """
+    DevMind – Semantic Codebase Memory & Static Code Intelligence.
+    """
+    if version:
+        try:
+            import importlib.metadata
+            ver = importlib.metadata.version("devmind-cli")
+        except Exception:
+            ver = "0.3.7"
+        typer.echo(f"DevMind CLI v{ver}")
+        raise typer.Exit()
+
+    if ctx.invoked_subcommand is None:
+        from devmind.terminal_ui import run_interactive_cli
+        run_interactive_cli(".")
 
 async def remember_pipeline(directory: str, incremental: bool = False, deep: bool = False):
     """
@@ -207,10 +235,11 @@ def init():
 @app.command()
 def config():
     """
-    View or reconfigure your active AI model provider and credentials.
+    Configuration Inspector & Switcher: view active credentials, storage paths,
+    embedding engine, fallback keys, and switch providers/models without re-entering all keys.
     """
-    from devmind.config_wizard import run_setup_wizard
-    run_setup_wizard()
+    from devmind.config_wizard import inspect_and_switch_config
+    inspect_and_switch_config()
 
 @app.command()
 def ask(
@@ -380,6 +409,41 @@ def dashboard(
     os.chdir(abs_dir)
     typer.echo(f"Starting DevMind Web UI Dashboard on http://localhost:{port} targeting '{abs_dir}' ...")
     uvicorn.run("devmind.web.app:app", host="127.0.0.1", port=port, reload=False)
+
+@app.command()
+def tui(
+    directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to target.")
+):
+    """
+    Launch the interactive DevMind Terminal UI.
+    """
+    abs_dir = os.path.abspath(directory)
+    from devmind.terminal_ui import run_interactive_cli
+    run_interactive_cli(abs_dir)
+
+@app.command()
+def interactive(
+    directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to target.")
+):
+    """
+    Launch the interactive DevMind Terminal session.
+    """
+    abs_dir = os.path.abspath(directory)
+    from devmind.terminal_ui import run_interactive_cli
+    run_interactive_cli(abs_dir)
+
+@app.command()
+def doctor(
+    directory: str = typer.Option(".", "--dir", "-d", help="The directory of the codebase to diagnose.")
+):
+    """
+    Run self-healing system & environment diagnostics (Python, Git, AI provider, FastEmbed, memory databases, permissions).
+    """
+    abs_dir = os.path.abspath(directory)
+    from devmind.terminal_ui import render_doctor_diagnostics
+    all_ok = render_doctor_diagnostics(abs_dir)
+    if not all_ok:
+        raise typer.Exit(code=1)
 
 @app.command()
 def mcp():
