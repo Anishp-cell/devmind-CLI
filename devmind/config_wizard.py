@@ -149,7 +149,12 @@ def verify_provider_connection(
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
-                    return True, f"Ollama daemon is running at {base_url}."
+                    data = json.loads(resp.read().decode())
+                    available = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                    target_model = model.replace("ollama/", "")
+                    if target_model and available and not any(target_model in m or m in target_model for m in available):
+                        return False, f"Ollama is running at {base_url}, but model '{target_model}' was not found in installed models ({', '.join(available[:3])}). Run 'ollama pull {target_model}' first."
+                    return True, f"Ollama daemon is running at {base_url} (model: {target_model})."
                 return False, f"Ollama responded with status {resp.status}"
 
         elif provider_id == "custom":
@@ -329,8 +334,39 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
         elif choice == "5":
             provider_id = "ollama"
             console.print("\n[dim]Ensure Ollama is running locally ('ollama serve').[/dim]")
-            base_url = Prompt.ask("Enter Ollama base URL", default="http://localhost:11434").strip()
-            model_name = Prompt.ask("Enter local model name (e.g. llama3.2, qwen2.5-coder, mistral)", default="llama3.2").strip()
+            base_url = Prompt.ask("Enter Ollama base URL", default="http://localhost:11434").strip().rstrip("/")
+            
+            # Auto-detect installed models
+            installed_models = []
+            try:
+                tags_url = f"{base_url}/api/tags"
+                req = urllib.request.Request(tags_url)
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    if resp.status == 200:
+                        data = json.loads(resp.read().decode())
+                        installed_models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+            except Exception:
+                pass
+
+            if installed_models:
+                console.print(f"\n[bold green]Detected {len(installed_models)} installed Ollama model(s):[/bold green]")
+                for idx, m_name in enumerate(installed_models, start=1):
+                    console.print(f"  [{idx}] {m_name}")
+                console.print("  [C] Custom model name")
+
+                coder_default = next((str(i) for i, m in enumerate(installed_models, 1) if "coder" in m.lower()), "1")
+                model_pick = Prompt.ask(
+                    f"Select model [1-{len(installed_models)} or C]",
+                    default=coder_default
+                ).strip()
+
+                if model_pick.isdigit() and 1 <= int(model_pick) <= len(installed_models):
+                    model_name = installed_models[int(model_pick) - 1]
+                else:
+                    model_name = Prompt.ask("Enter custom Ollama model name").strip()
+            else:
+                model_name = Prompt.ask("Enter local model name (e.g. qwen2.5-coder:3b, llama3.2, mistral)", default="qwen2.5-coder:3b").strip()
+
             model = f"ollama/{model_name}"
             config_to_save = {
                 "LLM_PROVIDER": "ollama",
@@ -409,7 +445,7 @@ def run_setup_wizard(console: Optional[Console] = None) -> bool:
             f"  [bold]Model:[/bold]     {config_to_save.get('LLM_MODEL')}\n"
             f"  [bold]Scope:[/bold]     {scope_label}\n"
             f"  [bold]Saved to:[/bold]  [cyan]{saved_path}[/cyan]\n\n"
-            f"[dim]You are ready to use DevMind! Run 'devmind ask \"How does auth work?\"' or 'devmind health'.[/dim]"
+            f"[dim]You are ready to use DevMind! Ask any question about your codebase in plain English, or run 'devmind health'.[/dim]"
         )
         console.print(Panel(success_card, border_style="green", padding=(1, 2)))
         return True
@@ -515,7 +551,7 @@ def inspect_and_switch_config(console: Optional[Console] = None) -> None:
                 "gemini": "gemini/gemini-2.0-flash",
                 "anthropic": "anthropic/claude-3-5-sonnet-20241022",
                 "openai": "openai/gpt-4o-mini",
-                "ollama": "ollama/llama3.2",
+                "ollama": "ollama/qwen2.5-coder:3b",
                 "openrouter": "openrouter/meta-llama/llama-3.3-70b-instruct",
                 "custom": "local-model"
             }

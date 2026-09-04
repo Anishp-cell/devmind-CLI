@@ -273,12 +273,13 @@ def ensure_web_server_running(host: str = "127.0.0.1", port: int = 8000) -> bool
 
     def _run():
         import uvicorn
-        uvicorn.run("devmind.web.app:app", host=host, port=port, log_level="warning")
+        from devmind.web.app import app as web_app
+        uvicorn.run(web_app, host=host, port=port, log_level="warning")
 
     th = threading.Thread(target=_run, daemon=True)
     th.start()
 
-    for _ in range(25):
+    for _ in range(35):
         time.sleep(0.1)
         if is_running():
             return True
@@ -376,9 +377,13 @@ def dispatch_tool_by_number(choice: str, project_dir: str) -> None:
     elif choice == "13":
         import webbrowser
         url = "http://localhost:8000/#graph"
-        console.print(f"[bold cyan]Starting local web server and opening visual graph at {url} ...[/bold cyan]")
-        ensure_web_server_running()
-        webbrowser.open(url)
+        console.print(f"[bold cyan]Starting local web server for visual graph...[/bold cyan]")
+        ok = ensure_web_server_running()
+        if ok:
+            console.print(f"[bold green][OK] DevMind visual graph active at {url}[/bold green]\n")
+            webbrowser.open(url)
+        else:
+            console.print(f"[bold yellow][WARN] Could not bind port 8000. Try 'devmind graph' in a separate terminal.[/bold yellow]\n")
 
     elif choice == "14":
         mode = Prompt.ask("Maintenance Action", choices=["forget-file", "wipe-all", "cancel"], default="cancel")
@@ -569,9 +574,13 @@ def run_interactive_cli(project_dir: str = ".") -> None:
                 elif cmd_name == "graph":
                     import webbrowser
                     url = "http://localhost:8000/#graph"
-                    console.print(f"[bold cyan]Starting local web server and opening visual graph in browser at {url} ...[/bold cyan]")
-                    ensure_web_server_running()
-                    webbrowser.open(url)
+                    console.print(f"[bold cyan]Starting local web server for visual graph...[/bold cyan]")
+                    ok = ensure_web_server_running()
+                    if ok:
+                        console.print(f"[bold green][OK] DevMind visual graph active at {url}[/bold green]\n")
+                        webbrowser.open(url)
+                    else:
+                        console.print(f"[bold yellow][WARN] Could not bind port 8000. Try 'devmind graph' in a separate terminal.[/bold yellow]\n")
                     continue
 
                 elif cmd_name == "refresh":

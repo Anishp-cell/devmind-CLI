@@ -541,7 +541,7 @@ def format_onboarding_markdown(report: OnboardingReport) -> str:
         "devmind remember",
         "",
         "# Ask anything about architecture or workflows",
-        'devmind ask "How does data ingestion and graph indexing work?"',
+        'devmind ask "How does the application initialize and handle core workflows?"',
         "",
         "# Check technical debt and code health score",
         "devmind health",

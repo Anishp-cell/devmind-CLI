@@ -34,6 +34,21 @@ os.environ["LITELLM_SUPPRESS_PROVIDER_INFO"] = "True"
 os.environ["LITELLM_LOG"] = "ERROR"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
+# Satisfy Cognee's LLMConfig validator on import when LLM_MODEL is defined in .env
+if os.environ.get("LLM_MODEL") and not os.environ.get("LLM_ENDPOINT"):
+    if os.environ.get("LLM_PROVIDER") == "ollama" or "ollama" in os.environ.get("LLM_MODEL", ""):
+        endpoint = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        if not endpoint.endswith("/v1"):
+            endpoint = f"{endpoint}/v1"
+        os.environ["LLM_ENDPOINT"] = endpoint
+        if not os.environ.get("LLM_API_KEY"):
+            os.environ["LLM_API_KEY"] = "ollama"
+    else:
+        if not os.environ.get("LLM_ENDPOINT"):
+            os.environ["LLM_ENDPOINT"] = "https://api.groq.com/openai/v1"
+        if not os.environ.get("LLM_API_KEY"):
+            os.environ["LLM_API_KEY"] = os.environ.get("GROQ_API_KEY", "dummy")
+
 try:
     import litellm
     litellm.suppress_debug_info = True
@@ -608,6 +623,32 @@ async def recall_query(query: str) -> str:
     except Exception:
         pass
 
+    # Check if query is asking for a general project/codebase overview
+    query_lower = query.lower()
+    is_general_query = any(phrase in query_lower for phrase in [
+        "what is this", "what does this", "overview", "architecture", "what is the project",
+        "explain this project", "explain codebase", "tell me about this", "about this repo",
+        "what does this project do", "what is devmind", "what is this repo"
+    ])
+
+    if is_general_query:
+        # Prepend README.md or ONBOARDING.md summary
+        for doc_name in ["README.md", "ONBOARDING.md", "readme.md", "README.rst"]:
+            doc_path = os.path.join(current_dir, doc_name)
+            if os.path.exists(doc_path):
+                try:
+                    with open(doc_path, "r", encoding="utf-8", errors="ignore") as f:
+                        doc_text = f.read()[:2000]
+                    ast_matches.insert(0, {
+                        "score": 100,
+                        "rel_path": doc_name,
+                        "snippet": doc_text.strip(),
+                        "funcs": []
+                    })
+                    break
+                except Exception:
+                    pass
+
     if ast_matches:
         top_items = ast_matches[:4]
 
@@ -618,6 +659,8 @@ async def recall_query(query: str) -> str:
 
             provider = (os.getenv("LLM_PROVIDER") or cfg.get("LLM_PROVIDER") or cfg.get("provider", "")).lower()
             model = os.getenv("LLM_MODEL") or cfg.get("LLM_MODEL") or cfg.get("model", "")
+            ollama_base = os.getenv("OLLAMA_BASE_URL") or cfg.get("OLLAMA_BASE_URL") or "http://localhost:11434"
+            ollama_base = ollama_base.rstrip("/")
 
             # Resolve API key
             api_key = (
@@ -642,7 +685,7 @@ async def recall_query(query: str) -> str:
                     elif provider == "openai":
                         model = "openai/gpt-4o-mini"
                     elif provider == "ollama":
-                        model = "ollama/llama3.2"
+                        model = "ollama/qwen2.5-coder:3b"
                     else:
                         model = "gemini/gemini-2.0-flash"
 
@@ -655,11 +698,11 @@ async def recall_query(query: str) -> str:
                     {
                         "role": "system",
                         "content": (
-                            "You are DevMind, a helpful and knowledgeable software engineering assistant. "
-                            "Answer the developer's question in clear, simple, easy-to-understand plain English. "
-                            "Explain the key concepts clearly and concisely with short bullet points and brief code examples if helpful. "
-                            "Never dump raw tables of symbols or lists of imports. "
-                            "Make your explanation intuitive, structured, and easy for any engineer to read immediately."
+                            "You are DevMind, an expert software intelligence assistant analyzing the developer's codebase. "
+                            "Answer the developer's question in clear, natural, easy-to-understand plain English. "
+                            "Explain the key concepts concisely with bullet points and code examples where helpful. "
+                            "Answer specifically about the codebase context provided. Do NOT talk about DevMind itself unless the project being analyzed is DevMind. "
+                            "Never dump raw tables of symbols or unformatted lists of imports."
                         )
                     },
                     {
@@ -668,9 +711,20 @@ async def recall_query(query: str) -> str:
                     }
                 ]
 
+                # Local Ollama models need longer timeout for CPU/GPU generation
+                llm_timeout = 45.0 if provider == "ollama" else 15.0
+                kwargs = {
+                    "model": model,
+                    "messages": prompt_messages,
+                }
+                if provider == "ollama":
+                    kwargs["api_base"] = ollama_base
+                elif api_key:
+                    kwargs["api_key"] = api_key
+
                 res = await asyncio.wait_for(
-                    litellm.acompletion(model=model, api_key=api_key if api_key else None, messages=prompt_messages),
-                    timeout=6.0
+                    litellm.acompletion(**kwargs),
+                    timeout=llm_timeout
                 )
                 ai_text = res.choices[0].message.content.strip()
                 if ai_text:
@@ -682,18 +736,18 @@ async def recall_query(query: str) -> str:
         # 2. Clean, Simple English Offline Summary (Fallback)
         summary_lines = [
             f"### Codebase Overview: \"{query}\"\n",
-            "Here are the key files and functions in your codebase that implement this:\n"
+            "Here are the key files and components in this codebase relevant to your question:\n"
         ]
 
         for item in top_items:
             funcs_str = f" (Symbols: {', '.join(item['funcs'])})" if item['funcs'] else ""
             summary_lines.append(f"- **`{item['rel_path']}`**{funcs_str}")
             if item['snippet']:
-                summary_lines.append(f"```python\n{item['snippet']}\n```")
+                summary_lines.append(f"```python\n{item['snippet'][:300]}\n```")
             summary_lines.append("")
 
         summary_lines.append("---")
-        summary_lines.append("[dim]Tip: To get full conversational explanations synthesized by AI, run [/dim][bold cyan]/init[/bold cyan][dim] to connect a free Gemini or Groq model in 30 seconds.[/dim]")
+        summary_lines.append("[dim]Tip: For full conversational AI synthesis, run [/dim][bold cyan]/init[/bold cyan][dim] to connect cloud AI (Gemini, Groq, Claude) or local Ollama.[/dim]")
         return "\n".join(summary_lines)
 
     return "No relevant files or symbols found in the codebase index matching your query."
