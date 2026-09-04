@@ -109,7 +109,7 @@ def main_entry(
             import importlib.metadata
             ver = importlib.metadata.version("devmind-cli")
         except Exception:
-            ver = "0.3.7"
+            ver = "1.0.0"
         typer.echo(f"DevMind CLI v{ver}")
         raise typer.Exit()
 
